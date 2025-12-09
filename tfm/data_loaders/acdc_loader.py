@@ -170,12 +170,20 @@ class ACDCDataset(Dataset):
             seg_a = np.transpose(seg_a, (2, 0, 1))
             seg_b = np.transpose(seg_b, (2, 0, 1))
             time_vector = np.linspace(0, 1, x_prev_final.shape[0] + 1, dtype=np.float32)
-            # todo: also fix the time vector accordingly?
+            target_time = time_vector[[target_idx]]
+            context_time = time_vector[:target_idx]
+            context_time = np.where(missing_mask.astype(bool), context_time, -1.0).astype(np.float32)
+
+            # left-pad to match length (self.frames - 1); padded slots also -1
+            pad_len = self.frames - 1 - context_time.shape[0]
+            if pad_len > 0:
+                pad_times = -np.ones(pad_len, dtype=np.float32)
+                context_time = np.concatenate((pad_times, context_time), axis=0)
 
             return {"target_img": torch.from_numpy(x.astype(np.float32)[np.newaxis, ...]),
                     "context": torch.from_numpy(x_prev_final.astype(np.float32)),
                     "target_seg": seg_a, "context_seg": seg_b,
-                    "target_time": time_vector[[-1]], "context_time": time_vector[:-1]}
+                    "target_time": target_time, "context_time": context_time}
 
 
 
