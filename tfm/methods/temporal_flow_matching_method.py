@@ -87,8 +87,7 @@ class TemporalFlowMatching(nn.Module):
         B, T = x.shape[:2]
         # Determine which frames are valid (not all zeros).
         valid = x.abs().sum(dim=(2, 3, 4, 5)) != 0  # shape (B, T)
-        #if not valid.any(dim=1).all():
-        #    raise ValueError("Each batch must contain at least one valid frame.")
+
         idx = torch.arange(T, device=x.device).unsqueeze(0).expand(B, T)
         # Forward fill: for each time step, use the last valid index if available; else -1.
         forward_fill = torch.where(valid, idx, torch.full_like(idx, -1))

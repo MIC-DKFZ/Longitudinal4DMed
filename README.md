@@ -1,15 +1,20 @@
-# Temporal Flow Matching
+# CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series
 
-This repository is the official implementation of **Temporal Flow Matching (TFM)**, a spatio-temporal and generative framework for longitudinal medical imaging.   
+This repository is the official implementation of **CRONOS** and the continuations **Temporal Flow Matching (TFM)**, a spatio-temporal and generative framework for longitudinal medical imaging.   
 
-The method is presented in the paper:
+The method is presented in the papers:
 [Temporal Flow Matching for Learning Spatio-Temporal Trajectories in 4D Longitudinal Medical Imaging](https://arxiv.org/abs/2508.21580).
+
+[CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series](https://arxiv.org/abs/2512.16577).
+
+
 
 ## Features
 
 - Flow Matching for sequence-to-image forecasting.
 - Discrete variant (grid-based, e.g. regular follow-up times).
-- Supports 3D+T or 4D sequences (e.g. MRI volumes).
+- Continuous time reconstructions 
+- Supports 3D+T or 4D sequences (e.g. MRI volumes, CT or US).
 - Simple, dependency-light PyTorch code.
 - Supports longitudinal and spatio-temporal medical imaging datasets.
 
@@ -47,5 +52,14 @@ If you find this work useful for your research, please consider citing:
       archivePrefix={arXiv},
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2508.21580}, 
+}
+@misc{disch2025cronoscontinuoustimereconstruction,
+      title={CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series}, 
+      author={Nico Albert Disch and Saikat Roy and Constantin Ulrich and Yannick Kirchhoff and Maximilian Rokuss and Robin Peretzke and David Zimmerer and Klaus Maier-Hein},
+      year={2025},
+      eprint={2512.16577},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2512.16577}, 
 }
 ```

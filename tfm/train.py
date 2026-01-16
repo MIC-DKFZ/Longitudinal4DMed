@@ -16,6 +16,7 @@ import datetime
 from pathlib import Path
 from utils.validation_utils import val_step
 from tfm.methods.temporal_flow_matching_method import TemporalFlowMatching
+from tfm.methods.cronos import CRONOS
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -24,10 +25,18 @@ import tqdm
 
 def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     # todo: build the option to have different models here
-    model = TemporalFlowMatching(
-        feature_size=args.base_channels,
-        **(vars(args)),
-    )
+    model_type = 'cronos' # args.model_type
+    if model_type == 'cronos':
+        model = CRONOS(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
+    else:
+        print('No valid model used: Defaulting to Temporal Flow Matching model')
+        model = TemporalFlowMatching(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
     model.to(device)
     return model
 
