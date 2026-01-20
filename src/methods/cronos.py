@@ -50,6 +50,7 @@ class CRONOS(nn.Module):
         self.reconstruction_threshold = kwargs.get('reconstruction_threshold', 0.001)
         self.mask_time = kwargs.get('mask_time', 1.0)
         self.guidance_scale = kwargs.get('guidance_scale', 3.0)
+        self.fm_model_unet_expands = kwargs.get('fm_model_unet_expands', [1, 1, 2, 4])
         # remove that later todo:
         embed = 'non_zero'
         from methods.fm_utils.fm_process_utils import process_fill_empty, process_batch_non_zero #todo: add the others as well!
@@ -75,12 +76,16 @@ class CRONOS(nn.Module):
 
             filtered_kwargs = filter_kwargs(ConditionedUNet, kwargs)
             # we use a different amount of input context frames, as we want to couple the time!!
-            self.u_net = ConditionedUNet(channel_mult=kwargs.get('fm_model_unet_expands'),
-                                         dim=(self.num_context, *in_shape[1:]),
-                                         num_res_blocks=1,
-                                         num_channels=feature_size, **filtered_kwargs)#.to(kwargs['device'])
+
+            self.u_net = ConditionedUNet(dim=(in_shape[0],) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
+                                   channel_mult=self.fm_model_unet_expands)#.to(kwargs['device'])
+
+            #self.u_net = ConditionedUNet(channel_mult=kwargs.get('fm_model_unet_expands', [1,1,2,4]),
+            #                             dim=(self.num_context, *in_shape[1:]),
+            #                             num_res_blocks=1,
+            #                             num_channels=feature_size, **filtered_kwargs)#.to(kwargs['device'])
         elif kwargs.get('unet_type', 'diff') == 'dit':
-            from MedVP.dit_util import NanoDiT
+            # from MedVP.dit_util import NanoDiT
             patch_size = [p // 4 for p in patch_size]
             # should probably rename this
             self.u_net = NanoDiT(input_size=list(in_shape[2:]),

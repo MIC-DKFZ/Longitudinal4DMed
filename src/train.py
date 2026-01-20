@@ -15,8 +15,8 @@ from torch.utils.data import Dataset, DataLoader
 import datetime
 from pathlib import Path
 from utils.validation_utils import val_step
-from tfm.methods.temporal_flow_matching_method import TemporalFlowMatching
-from tfm.methods.cronos import CRONOS
+from src.methods.temporal_flow_matching_method import TemporalFlowMatching
+from src.methods.cronos import CRONOS
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)

@@ -28,7 +28,7 @@ Regular updates will follow soon!
 Clone this repository and install the required packages:
 ```bash
 git clone https://github.com/MIC-DKFZ/Temporal-Flow-Matching.git
-cd tfm
+cd src
 pip install -e .
 ```
 

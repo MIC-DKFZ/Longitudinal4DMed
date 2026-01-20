@@ -202,13 +202,22 @@ def _compute_change_mask(batch_x_val, batch_y_val, batch_x_seg, batch_y_seg, tem
     return temporal_change_mask(batch_x_val, batch_y_val)
 
 
-def _compute_metric_with_mask(metric_function, model_output, batch_y_val, change_mask, apply_mask = False):
+def _compute_metric_with_mask(metric_function, model_output, batch_y_val, change_mask, apply_mask = False, metric_function_name = ''):
     ## refactor this, as we assume the change mask to be zero?
 
     if apply_mask:
-        metric_tensor = metric_function(model_output*change_mask, batch_y_val*change_mask)
-    else:
+        model_output = model_output * change_mask
+        batch_y_val = batch_y_val*change_mask
+        # metric_tensor = metric_function(model_output*change_mask, batch_y_val*change_mask)
+
+    if metric_function_name == 'perc':
+        # for lpips, ensure minimum spatial size, as some dims may be too low.
+        model_output = _ensure_min_spatial_for_lpips(model_output)
+        batch_y_val = _ensure_min_spatial_for_lpips(batch_y_val)
         metric_tensor = metric_function(model_output, batch_y_val)
+        return metric_tensor.mean()
+
+    metric_tensor = metric_function(model_output, batch_y_val)
     return metric_tensor.mean()
 
 
@@ -256,7 +265,7 @@ def _update_metrics_dicts(metric_functions, model_output, batch_y_val, change_ma
     for metric_name, metric_function in metric_functions.items():
         # todo: add the option for a change mask and rename it
         # todo: rename the change mask, as it uses either segmentation mask, or a difference mask?
-        metric_value = _compute_metric_with_mask(metric_function, model_output, batch_y_val, change_mask)
+        metric_value = _compute_metric_with_mask(metric_function, model_output, batch_y_val, change_mask, metric_function_name = metric_name)
 
         if metric_value is None:
             continue

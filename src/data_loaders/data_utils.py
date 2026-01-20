@@ -6,6 +6,10 @@ import os
 import numpy as np
 
 from .acdc_loader import ACDCDataset
+from .isles_loader import ISLESDataset
+
+
+
 
 class DummyTemporalDataset(Dataset):
     """
@@ -61,8 +65,25 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
         dataset = DummyTemporalDataset()
     else:
         if args.dataset == 'acdc':
-            data_dir = os.getenv("DATA_DIR_ACDC", "./data/ACDC/")
+            data_dir = os.getenv("DATA_DIR", "./data/")
             dataset = ACDCDataset(
+                data_dir=data_dir,
+                split=train_test_val,
+                num_to_keep_context=5,
+                **vars(args)
+            )
+        elif args.dataset == 'isles':
+            data_dir = os.getenv("DATA_DIR", "./data/")
+            dataset = ISLESDataset(
+                data_dir=data_dir,
+                train_test_val=train_test_val,
+                num_to_keep_context=5,
+                **vars(args)
+            )
+        elif args.dataset == 'lumiere':
+            from .lumiere_loader import LumiereDataset
+            data_dir = os.getenv("DATA_DIR", "./data/")
+            dataset = LumiereDataset(
                 data_dir=data_dir,
                 split=train_test_val,
                 num_to_keep_context=5,

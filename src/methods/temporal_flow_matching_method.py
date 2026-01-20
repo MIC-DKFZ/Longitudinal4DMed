@@ -42,7 +42,7 @@ class torch_wrapper(torch.nn.Module):
 class TemporalFlowMatching(nn.Module):
     def __init__(self, in_shape=None, **kwargs):
         '''
-        PAPER FREEZE: tfm
+        PAPER FREEZE: src
         :param network:
         :param in_shape: T,C,H,W,D
         :param kwargs:
