@@ -188,6 +188,10 @@ class ISLESDataset(Dataset):
         return self.data[index]
 
     def _get_data_shape(self):
+        '''
+        Used to build the model with the correct input shape
+        :return:
+        '''
         # we can make this more elegant, but this is fine I guess? maybe just move this to the train
         # T_all, C, D, H, W = self.in_shape
         data_sample = np.transpose(self.data[0], (3, 2, 1, 0))

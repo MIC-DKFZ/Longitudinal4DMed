@@ -89,6 +89,15 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
                 num_to_keep_context=5,
                 **vars(args)
             )
+        elif args.dataset == 'oasis':
+            from .oasis_loader import OASISDataset
+            data_dir = os.getenv("DATA_DIR", "./data/")
+            dataset = OASISDataset(
+                data_dir=data_dir,
+                split=train_test_val,
+                num_to_keep_context=5,
+                **vars(args)
+            )
         else:
             raise NotImplementedError(
             "Provide your own dataset or run with --use-dummy-data to test the pipeline."

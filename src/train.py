@@ -25,9 +25,15 @@ import tqdm
 
 def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     # todo: build the option to have different models here
-    model_type = 'cronos' # args.model_type
+    model_type = args.model_type
+    # model_type = 'cronos' # args.model_type
     if model_type == 'cronos':
         model = CRONOS(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
+    elif model_type == 'tfm':
+        model = TemporalFlowMatching(
             feature_size=args.base_channels,
             **(vars(args)),
         )
