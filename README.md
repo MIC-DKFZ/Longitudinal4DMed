@@ -39,7 +39,33 @@ To launch TensorBoard during or after training:
 tensorboard --logdir checkpoints/logs
 ```
 
+## Training
 
+Each dataset has a ready-made config in `configs/`:
+
+```bash
+# ACDC (cardiac MRI)
+python src/train.py --config configs/acdc.yaml
+
+# ISLES 2024 (stroke CTP)
+python src/train.py --config configs/isles.yaml
+
+# Lumiere (glioma MRI)
+python src/train.py --config configs/lumiere.yaml
+```
+
+CLI flags override any value from the config file, e.g. to run a quick debug pass:
+
+```bash
+python src/train.py --config configs/acdc.yaml --debug
+```
+
+For a quick install check without real data:
+
+```bash
+# see src/examples/train_dummy.ipynb
+python src/train.py --dummy --device cpu --debug
+```
 
 ## Contact
 For further information, or if you want to reach out to us, visit our  [webpage](https://www.dkfz.de/en/medical-image-computing).

@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import datetime
 from pathlib import Path
-from utils.validation_utils import val_step
+from utils.validation_utils import val_step, _extract_batch, _forward_and_reshape, get_last_context_image_baseline
 from src.methods.temporal_flow_matching_method import TemporalFlowMatching
 from src.methods.cronos import CRONOS
 
@@ -23,6 +23,36 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
+
+def _log_image_grid(writer: "SummaryWriter", model, loader, device, in_shape, epoch: int) -> None:
+    """Log a GT / LCI / Prediction side-by-side image to TensorBoard."""
+    import torch.nn.functional as F
+    try:
+        batch = next(iter(loader))
+        with torch.no_grad():
+            batch_x, batch_y, _, _, time_points = _extract_batch(batch, device)
+            pred, batch_y = _forward_and_reshape(model, batch_x, batch_y, time_points, in_shape=in_shape)
+            lci = get_last_context_image_baseline(batch_x)
+
+        def _to_slice(vol):
+            # vol: (C, D, H, W) or similar -> (1, H, W) central slice, normalised
+            arr = vol.detach().cpu().float()
+            while arr.ndim > 3:
+                arr = arr[arr.shape[0] // 2]
+            if arr.ndim == 2:
+                arr = arr.unsqueeze(0)
+            lo, hi = arr.min(), arr.max()
+            return (arr - lo) / (hi - lo + 1e-8)
+
+        gt_s   = _to_slice(batch_y[0])
+        lci_s  = _to_slice(lci[0])
+        pred_s = _to_slice(pred[0])
+        # side-by-side: (1, H, W*3)
+        grid = torch.cat([gt_s, lci_s, pred_s], dim=-1)
+        writer.add_image("Val/GT_LCI_Pred", grid, global_step=epoch)
+    except Exception:
+        pass  # image logging is best-effort; never break training
+
 
 def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     # todo: build the option to have different models here
@@ -121,6 +151,7 @@ def main() -> None:
             avg_val = val_result[1]
             for metric_name, metric_value in val_result[0].items():
                 writer.add_scalar(f"Val/{metric_name}", metric_value, epoch)
+            _log_image_grid(writer, model, validation_loader, device, data_shape, epoch)
 
             # "best" checkpoint
             if avg_val < best_val and not args.debug:

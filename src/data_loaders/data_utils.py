@@ -66,6 +66,8 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
     else:
         if args.dataset == 'acdc':
             data_dir = os.getenv("DATA_DIR", "./data/")
+            local_data_path_folder = 'ACDC'
+            data_dir = os.path.join(data_dir, local_data_path_folder)
             dataset = ACDCDataset(
                 data_dir=data_dir,
                 split=train_test_val,

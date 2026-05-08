@@ -1,5 +1,14 @@
 import argparse
 
+def _load_yaml_config(path: str) -> dict:
+    try:
+        import yaml
+    except ImportError:
+        raise ImportError("PyYAML is required to use --config. Run: pip install pyyaml")
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Temporal Flow Matching (discrete) training")
 
@@ -33,5 +42,13 @@ def get_args() -> argparse.Namespace:
                         help="TensorBoard log directory. Defaults to <save_dir>/logs.")
     parser.add_argument("--dummy", action="store_true",
                         help="Use DummyTemporalDataset instead of a real dataset.")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to a YAML config file. CLI flags override YAML values.")
+
+    # Pre-parse to find --config, then apply YAML as defaults before full parse.
+    pre, _ = parser.parse_known_args()
+    if pre.config is not None:
+        yaml_cfg = _load_yaml_config(pre.config)
+        parser.set_defaults(**yaml_cfg)
 
     return parser.parse_args()

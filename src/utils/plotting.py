@@ -40,7 +40,8 @@ def to_nump(input_tensor: torch.tensor, infer_shape=True) -> np.array:
 def make_prediction_grid_and_save(x_gt, x_con, x_pred, dataset_name, method_name, run_id=0,
                                   metric_functions={'MSE': nn.MSELoss()},
                                   time_string=None,
-                                  base_dir="runs"):
+                                  base_dir="runs",
+                                  show: bool = False):
     """
     x_gt, x_pred, residual, mask: 2D numpy arrays
     metrics: dict like {'PSNR':…, 'SSIM':…, 'DSC':…, 'HD':…}
@@ -134,16 +135,82 @@ def make_prediction_grid_and_save(x_gt, x_con, x_pred, dataset_name, method_name
         if c == 0:
             ax.set_ylabel("Image", fontsize=12)
     # (keep your original fig, axs = plt.subplots(2,3, figsize=(12,8)))
-    fig.subplots_adjust(bottom=0.16)  # leave room at the bottom
-    fig.tight_layout(rect=[0.04, 0.15, 0.96, 0.95])  # leave ~15% at bottom for cbar
-    # Add a dedicated colorbar axis in that reserved strip
-    cax = fig.add_axes([0.12, 0.06, 0.76, 0.03])  # [left, bottom, width, height] in figure coords
+    fig.subplots_adjust(bottom=0.16)
+    fig.tight_layout(rect=[0.04, 0.15, 0.96, 0.95])
+    cax = fig.add_axes([0.12, 0.06, 0.76, 0.03])
     fig.colorbar(im, cax=cax, orientation='horizontal')
-    plt.show()
+
     if time_string is not None:
         summary_path = run_path_abs / time_string
     else:
         summary_path = run_path
-    # summary_path.mkdir(parents=True, exist_ok=True)
+    summary_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(summary_path / f"grid_{run_id:03d}.png", dpi=150, bbox_inches='tight')
+
+    if show:
+        plt.show()
     plt.close(fig)
-    # todo: save the fig to the dir
+
+
+def visualize_predictions(context, target, pred, lci=None, title="Predictions", show=True):
+    """Notebook-friendly 2x3 prediction grid (images + residuals).
+
+    Parameters
+    ----------
+    context : tensor (B, T, C, D, H, W) or (T, C, D, H, W)
+    target  : tensor (..., D, H, W)
+    pred    : tensor (..., D, H, W)
+    lci     : tensor (B, C, D, H, W) or (C, D, H, W).
+              The last observed context frame. Compute with
+              get_last_context_image_baseline() from validation_utils.
+
+    Returns the matplotlib Figure.
+    """
+    def _central_slice(t):
+        arr = t.squeeze().detach().cpu().float().numpy()
+        while arr.ndim > 2:
+            arr = arr[arr.shape[0] // 2]
+        lo, hi = arr.min(), arr.max()
+        return (arr - lo) / (hi - lo + 1e-8)
+
+    if target.ndim >= 5:
+        target = target[0]
+    if pred.ndim >= 5:
+        pred = pred[0]
+    if lci is not None and lci.ndim >= 5:
+        lci = lci[0]
+    gt_s, lci_s, pred_s = _central_slice(target), _central_slice(lci), _central_slice(pred)
+
+    res_lci  = np.abs(lci_s  - gt_s)
+    res_pred = np.abs(pred_s - gt_s)
+    rel_max  = max(res_lci.max(), res_pred.max(), 1e-8)
+
+    fig, axes = plt.subplots(2, 3, figsize=(11, 7))
+    for ax, img, ttl in zip(
+        axes[0],
+        [gt_s, lci_s, pred_s],
+        ["Ground truth", "Last context", "Prediction"],
+    ):
+        ax.imshow(img, cmap="gray", vmin=0, vmax=1)
+        ax.set_title(ttl, fontsize=11)
+        ax.axis("off")
+
+    axes[1, 0].axis("off")
+    im = None
+    for ax, res, ttl in zip(
+        axes[1, 1:],
+        [res_lci / rel_max, res_pred / rel_max],
+        ["|LCI - GT|", "|Pred - GT|"],
+    ):
+        im = ax.imshow(res, cmap="magma", vmin=0, vmax=1)
+        ax.set_title(ttl, fontsize=11)
+        ax.axis("off")
+
+    cax = fig.add_axes([0.35, 0.03, 0.30, 0.02])
+    fig.colorbar(im, cax=cax, orientation="horizontal", label="Normalised abs. error")
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout(rect=[0, 0.07, 1, 0.97])
+
+    if show:
+        plt.show()
+    return fig

@@ -289,9 +289,7 @@ def val_step(valid_loader, train_model, device, metric_functions = metric_functi
              save_path=None,
              log_images=False, time_string=None, return_metrics=True, mask_ratio=None, mask_order='front',
              **kwargs):
-    # val_loss = torch.inf
-    do_plotting = True
-    # do not do this every time?
+    do_plotting = log_images
     for name, metric in metric_functions.items():
         try:
             metric_functions[name] = metric.to(device)
@@ -362,13 +360,19 @@ def val_step(valid_loader, train_model, device, metric_functions = metric_functi
                 )
                 if do_plotting:
                     from utils.plotting import make_prediction_grid_and_save
-                    for batch in range(B):
-                        for channel in range(C):
-                            make_prediction_grid_and_save(batch_y_val[batch, channel],
-                                                          last_context_image[batch, channel],
-                                                          model_output[batch, channel],
-                                                          'test',
-                                                          'test_method')
+                    base = save_path if save_path else "runs"
+                    for b in range(B):
+                        for ch in range(C):
+                            make_prediction_grid_and_save(
+                                batch_y_val[b, ch],
+                                last_context_image[b, ch],
+                                model_output[b, ch],
+                                dataset_name=kwargs.get('dataset', 'dataset'),
+                                method_name=kwargs.get('model_type', 'model'),
+                                run_id=batch_idx_val * B + b,
+                                time_string=time_string,
+                                base_dir=base,
+                            )
         avg_metrics = {key: value / len(valid_loader) for key, value in total_metrics.items()}
 
         if load_torcheval:
