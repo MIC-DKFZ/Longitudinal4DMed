@@ -22,6 +22,7 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
 def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     # todo: build the option to have different models here
@@ -82,6 +83,8 @@ def main() -> None:
     device = get_device(args.device)
 
     os.makedirs(args.save_dir, exist_ok=True)
+    log_dir = args.log_dir if args.log_dir else os.path.join(args.save_dir, "logs")
+    writer = SummaryWriter(log_dir=log_dir)
 
     train_loader = build_dataloader(args)
     validation_loader = build_dataloader(args,train_test_val='val')
@@ -110,11 +113,14 @@ def main() -> None:
         )
         scheduler.step()
         print(f"Epoch {epoch} completed. Average loss: {avg_loss:.4f}")
+        writer.add_scalar("Loss/train", avg_loss, epoch)
 
         if epoch % args.log_interval == 0:
             val_result = val_step(validation_loader, model, min_val=best_val, **vars(args))
             # currently, we still insert the best loss into the val step, will be deprecated
             avg_val = val_result[1]
+            for metric_name, metric_value in val_result[0].items():
+                writer.add_scalar(f"Val/{metric_name}", metric_value, epoch)
 
             # "best" checkpoint
             if avg_val < best_val and not args.debug:
@@ -133,6 +139,8 @@ def main() -> None:
                     ckpt_path,
                 )
                 print(f"Saved new best checkpoint to {ckpt_path}")
+
+    writer.close()
 
 
 if __name__ == "__main__":

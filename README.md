@@ -1,13 +1,15 @@
 # CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series
 
+
 This repository is the official implementation of **CRONOS** and the continuations **Temporal Flow Matching (TFM)**, a spatio-temporal and generative framework for longitudinal medical imaging.   
 
 The method is presented in the papers:
+
 [Temporal Flow Matching for Learning Spatio-Temporal Trajectories in 4D Longitudinal Medical Imaging](https://arxiv.org/abs/2508.21580).
 
 [CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series](https://arxiv.org/abs/2512.16577).
 
-
+CRONOS has been accepted at ICLR 2026! 
 
 ## Features
 
@@ -28,8 +30,13 @@ Regular updates will follow soon!
 Clone this repository and install the required packages:
 ```bash
 git clone https://github.com/MIC-DKFZ/Temporal-Flow-Matching.git
-cd src
+cd Temporal-Flow-Matching
 pip install -e .
+```
+
+To launch TensorBoard during or after training:
+```bash
+tensorboard --logdir checkpoints/logs
 ```
 
 

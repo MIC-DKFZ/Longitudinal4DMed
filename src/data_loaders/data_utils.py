@@ -98,6 +98,15 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
                 num_to_keep_context=5,
                 **vars(args)
             )
+        elif args.dataset == 'brats':
+            from .brats_semi_loader import SemiSynthLongi
+            data_dir = os.getenv("DATA_DIR", "./data/")
+            dataset = SemiSynthLongi(
+                data_dir=data_dir,
+                split=train_test_val,
+                num_to_keep_context=5,
+                **vars(args)
+            )
         else:
             raise NotImplementedError(
             "Provide your own dataset or run with --use-dummy-data to test the pipeline."

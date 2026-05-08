@@ -9,7 +9,7 @@ def get_args() -> argparse.Namespace:
 
     # model
     parser.add_argument("--in-channels", type=int, default=1)
-    parser.add_argument("--base-channels", type=int, default=16)
+    parser.add_argument("--base-channels", type=int, default=8)
     parser.add_argument("--num-levels", type=int, default=4,
                         help="Number of down/up levels in the UNet (depends on your implementation).")
     parser.add_argument('--number_evals', type=int, default=10)
@@ -25,10 +25,12 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save_dir", type=str, default="checkpoints")
-    parser.add_argument("--dataset", type=str, default="isles",
+    parser.add_argument("--dataset", type=str, default="brats",
                         help="Dataset to use. Only used if --dummy is not set.") # acdc, isles, lumiere, oasis
     parser.add_argument("--model_type", type=str, default="tfm")
-
+    parser.add_argument("--fm_model_unet_expands", nargs='+', type=int, default=[1, 1, 1, 1])
+    parser.add_argument("--log_dir", type=str, default=None,
+                        help="TensorBoard log directory. Defaults to <save_dir>/logs.")
     parser.add_argument("--dummy", action="store_true",
                         help="Use DummyTemporalDataset instead of a real dataset.")
 

@@ -6,7 +6,7 @@ import nibabel as nib
 import pandas as pd
 from scipy.ndimage import zoom
 from src.utils.plotting import *
-from src.data_loaders.data_util_functions import filter_and_normalize, filter_and_normalize
+from src.data_loaders.data_util_functions import filter_and_normalize
 
 
 class LumiereDataset(Dataset):

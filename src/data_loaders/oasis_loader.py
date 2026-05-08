@@ -14,7 +14,7 @@ class OASISDataset(Dataset):
         self.noise = kwargs.get('noise', 0)
         self.num_to_keep = kwargs.get('num_to_keep_context', 1)
         self.train_test_val_mode = train_test_val
-        self.data_path = os.get('DATASET_LOCATION_ISLES', 'data') if data_dir is None else data_dir
+        self.data_path = os.getenv('DATASET_LOCATION_OASIS', 'data') if data_dir is None else data_dir
         self.max_time = kwargs.get('max_time', 1.0)  # here: just normalize to [0,1] using visit index
         self.frames = kwargs.get('frames', 16)
         self.hparams = kwargs

@@ -59,11 +59,11 @@ class TemporalFlowMatching(nn.Module):
         feature_size = kwargs.get('feature_size', 256)
         # self.u_net_type = 'fmu'
         self.u_net_type = kwargs.get('unet_type', 'fmu')
-        self.fm_model_unet_expands = kwargs.get('fm_model_unet_expands', [1, 1, 2, 4])
+        self.fm_model_unet_expands = kwargs.get('fm_model_unet_expands', [1, 1, 1, 1])
         self.criterion = kwargs.get('loss_fn', nn.MSELoss())
         if self.u_net_type == 'fmu':
             self.u_net = UNetModel(dim=(in_shape[0],) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
-                                   channel_mult=self.fm_model_unet_expands)
+                                   channel_mult=self.fm_model_unet_expands, use_checkpoint=True, attention_resolutions="9999")
         else:
             print('choose valid Unet!')
 
@@ -72,7 +72,7 @@ class TemporalFlowMatching(nn.Module):
         self.hparams = kwargs
         self.fill_context = kwargs.get('fill_context', 1) > 0  # again, the argparser does not recognize False??
         self.mask_missing = kwargs.get('mask_missing', False)
-        self.aggretation_mode = kwargs.get('aggretation_mode', 'mean')
+        self.aggregation_mode = kwargs.get('aggregation_mode', 'mean')
         # swap around later??
         self.noise = 0.00
         self.device = self.hparams['device']
@@ -155,9 +155,9 @@ class TemporalFlowMatching(nn.Module):
             denom = mask.sum(dim=1, keepdim=True).clamp_min(1.0)
             return (val_res * mask).sum(dim=1, keepdim=True) / (denom + 1e-8)
 
-        if self.aggretation_mode == 'mean':
+        if self.aggregation_mode == 'mean':
             return val_res.mean(dim=1, keepdim=True)
-        elif self.aggretation_mode == 'last':
+        elif self.aggregation_mode == 'last':
             return val_res[:, [-1]]
         else:
             return val_res.mean(dim=1, keepdim=True)
