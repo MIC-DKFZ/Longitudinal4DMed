@@ -21,20 +21,118 @@ def save_gif(volume_t, path, fps: int = 8):
     imageio.mimsave(str(path), frames, fps=fps, loop=0)
 
 
+def save_overlay_gif(images, flows, path, fps: int = 4, alpha: float = 0.3, norm_percentile: int = 99):
+    """Save a GIF with a red-blue flow overlay blended onto a grayscale background.
+
+    images:          (T, H, W) grayscale tensor — context + target frames
+    flows:           (T, H, W) signed difference tensor — same length as images
+    alpha:           max opacity of the flow colour; scaled per-pixel by flow magnitude
+    norm_percentile: flow values are normalised by this percentile of all absolute
+                     values, so small-but-real cardiac motion stays visible
+    """
+    # Collect all flow magnitudes for percentile-based normalisation.
+    # Using max would let a single outlier frame wash out the rest.
+    all_abs = np.concatenate([
+        (f.detach().cpu().float().numpy() if torch.is_tensor(f) else np.asarray(f, float)).ravel()
+        for f in flows
+    ])
+    nonzero_abs = all_abs[np.abs(all_abs) > 1e-8]
+    global_scale = (float(np.percentile(nonzero_abs, norm_percentile)) + 1e-8
+                    if len(nonzero_abs) > 0 else 1.0)
+
+    frames = []
+    for img, flow in zip(images, flows):
+        img_np = img.detach().cpu().float().numpy().squeeze() if torch.is_tensor(img) else np.asarray(img, float).squeeze()
+        flow_np = flow.detach().cpu().float().numpy().squeeze() if torch.is_tensor(flow) else np.asarray(flow, float).squeeze()
+
+        # Grayscale background → RGB [0, 1]
+        lo, hi = img_np.min(), img_np.max()
+        g = (img_np - lo) / (hi - lo + 1e-8)
+        bg = np.stack([g, g, g], axis=-1)  # (H, W, 3)
+
+        # Red = positive change, Blue = negative change; clip outliers to ±1
+        f = np.clip(flow_np / global_scale, -1, 1)
+        overlay = np.stack([np.clip(f, 0, 1), np.zeros_like(f), np.clip(-f, 0, 1)], axis=-1)
+
+        # Magnitude-weighted blend: static background stays pure grey
+        eff_alpha = alpha * np.abs(f)[..., None]
+        composite = np.clip((1 - eff_alpha) * bg + eff_alpha * overlay, 0, 1)
+        frames.append((composite * 255).astype(np.uint8))
+
+    imageio.mimsave(str(path), frames, fps=fps, loop=0)
+
+
+def _sample_to_gifs(sample, results_dir, name, fps=4):
+    """Generate plain and overlay GIFs from a dataset sample dict.
+
+    Handles both torch-tensor and numpy-array samples.
+    Expected keys: 'context' (T, C, D, H, W), 'target_img' (1, C, D, H, W).
+    """
+    def _to_tensor(x):
+        if torch.is_tensor(x):
+            return x.float()
+        return torch.from_numpy(np.array(x, dtype=np.float32))
+
+    ctx = _to_tensor(sample['context'])
+    tgt = _to_tensor(sample['target_img'])
+    all_img = torch.cat([ctx, tgt], dim=0)               # (T, C, D, H, W)
+    imgs = all_img[:, 0, all_img.shape[2] // 2, :, :]   # mid-depth slice → (T, H, W)
+
+    flows = torch.diff(imgs, dim=0)
+    flows = torch.cat([torch.zeros_like(flows[:1]), flows], dim=0)
+
+    # Suppress diffs at transitions from/to missing (all-zero) frames
+    is_missing = imgs.flatten(1).abs().sum(1) == 0
+    prev_missing = torch.cat([is_missing.new_tensor([False]), is_missing[:-1]])
+    flows[is_missing | prev_missing] = 0.0
+
+    plain_path = os.path.join(results_dir, f"{name}_example.gif")
+    save_gif(imgs, plain_path, fps=fps)
+    print(f"Saved plain GIF:   {plain_path}")
+
+    overlay_path = os.path.join(results_dir, f"{name}_overlay.gif")
+    save_overlay_gif(imgs, flows, overlay_path, fps=fps)
+    print(f"Saved overlay GIF: {overlay_path}")
+
+
+def _build_dataset(name, data_dir, debug=True, val_split=0):
+    if name == 'acdc':
+        from data_loaders.acdc_loader import ACDCDataset
+        return ACDCDataset(data_dir=os.path.join(data_dir, 'ACDC'), split='val',
+                           num_to_keep_context=12, debug=debug, val_split=val_split)
+    if name == 'isles':
+        from data_loaders.isles_loader import ISLESDataset
+        return ISLESDataset(data_dir=data_dir, train_test_val='val',
+                            num_to_keep_context=5, debug=debug, val_split=val_split, dense=True)
+    if name == 'lumiere':
+        from data_loaders.lumiere_loader import LumiereDataset
+        return LumiereDataset(data_dir=data_dir, split='val',
+                              num_to_keep_context=5, debug=debug, val_split=val_split)
+    if name == 'oasis':
+        from data_loaders.oasis_loader import OASISDataset
+        return OASISDataset(data_dir=data_dir, split='val',
+                            num_to_keep_context=5, debug=debug, val_split=val_split)
+    raise ValueError(f"Unknown dataset '{name}'. Add it to _build_dataset().")
+
 
 if __name__ == '__main__':
+    import argparse
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-    from data_loaders.acdc_loader import ACDCDataset
 
-    data_dir = os.getenv("DATA_DIR", "./data/ACDC/")
-    dataset = ACDCDataset(data_dir=data_dir, split="val", num_to_keep_context=12, debug=True, val_split=0)
-    sample = next(iter(dataset))
-    all_img = torch.cat([sample['context'], sample['target_img']], dim=0)
+    parser = argparse.ArgumentParser(description="Generate example GIFs for a dataset.")
+    parser.add_argument('--dataset', type=str, default='isles',
+                        choices=['acdc', 'isles', 'lumiere', 'oasis'],
+                        help='Which dataset to visualise.')
+    parser.add_argument('--fps', type=int, default=4)
+    parser.add_argument('--val_split', type=int, default=0)
+    args = parser.parse_args()
 
+    data_dir = os.getenv("DATA_DIR", "./data")
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    results_dir  = os.path.join(project_root, "results")
+    results_dir = os.path.join(project_root, "results")
     os.makedirs(results_dir, exist_ok=True)
-    out_path = os.path.join(results_dir, "acdc_example.gif")
-    save_gif(all_img[:, 0, all_img.shape[2] // 2, :, :], out_path)
-    print(f"Saved {out_path}")
+
+    dataset = _build_dataset(args.dataset, data_dir, debug=True, val_split=args.val_split)
+    sample = next(iter(dataset))
+    _sample_to_gifs(sample, results_dir, name=args.dataset, fps=args.fps)

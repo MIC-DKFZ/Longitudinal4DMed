@@ -27,6 +27,7 @@ class ISLESDataset(Dataset):
         self.data_raw = {}
         self.data = {}
         self.data_save = {}
+        self.dense = kwargs.get('dense', False)
         self.include_first = True
         self.include_last = True
         # check if we want to load / save the data
@@ -119,7 +120,17 @@ class ISLESDataset(Dataset):
         sampled_data = data[:, np.newaxis]
         sampled_data = filter_and_normalize(sampled_data)# data[::5, np.newaxis] was the previous one!
         t_full = sampled_data.shape[0]
-        if self.precompute_random:
+        if self.dense:
+            # Return the full sequence: all frames as context, last frame as target
+            context = sampled_data[:-1]
+            target = sampled_data[[-1]]
+            time_full = np.linspace(0, 1, t_full, dtype=np.float32)
+            return {'target_img': target, 'context': context,
+                    'target_seg': np.ones(shape=target.shape),
+                    'context_seg': np.ones(shape=target.shape),
+                    'target_time': time_full[[-1]],
+                    'context_time': time_full[:-1]}
+        elif self.precompute_random:
             rand_info = self.indices_random[index]
             target_idx = rand_info['target_idx']
             missing_mask = rand_info['missing_mask']

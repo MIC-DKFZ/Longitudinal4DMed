@@ -22,6 +22,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--num-levels", type=int, default=4,
                         help="Number of down/up levels in the UNet (depends on your implementation).")
     parser.add_argument('--number_evals', type=int, default=10)
+    parser.add_argument('--training_noise', type=float, default=0.01)
 
     # optimization
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -34,7 +35,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save_dir", type=str, default="checkpoints")
-    parser.add_argument("--dataset", type=str, default="brats",
+    parser.add_argument("--dataset", type=str, default="isles",
                         help="Dataset to use. Only used if --dummy is not set.") # acdc, isles, lumiere, oasis
     parser.add_argument("--model_type", type=str, default="tfm")
     parser.add_argument("--fm_model_unet_expands", nargs='+', type=int, default=[1, 1, 1, 1])

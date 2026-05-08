@@ -1,0 +1,32 @@
+# Lumiere -- glioma MRI longitudinal, ~48 training cases, continuous time
+# Usage: python src/train.py --config configs/lumiere.yaml
+# Data env var: DATASET_LOCATION  (must contain trn_lumiere.npy, val_lumiere.npy, tst_lumiere.npy)
+# See src/data_loaders/lumiere_loader.py generate_save_data() for preprocessing.
+
+dataset: lumiere
+model_type: cronos
+
+# data
+batch_size: 2
+num_workers: 2
+num_to_keep_context: 2
+# data_time_embed_resolution: 16   # max context window length after padding/truncation
+# mask_training: true              # randomly drop context frames during training
+# val_split: 0
+
+# model
+base_channels: 32
+# fm_model_unet_expands: [1, 2, 4, 8]
+number_evals: 10
+training_noise: 0.01
+
+# optimization
+lr: 1e-4
+weight_decay: 0.01
+num_epochs: 500
+log_interval: 10
+
+# misc
+seed: 42
+device: cuda
+save_dir: checkpoints/lumiere

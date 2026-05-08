@@ -113,11 +113,21 @@ def main() -> None:
     device = get_device(args.device)
 
     os.makedirs(args.save_dir, exist_ok=True)
-    log_dir = args.log_dir if args.log_dir else os.path.join(args.save_dir, "logs")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = (
+        f"{args.model_type}_{args.dataset}"
+        f"_ch{args.base_channels}"
+        f"_lr{args.lr}"
+        f"_sig{args.training_noise}"
+        f"_seed{args.seed}"
+        f"_{timestamp}"
+    )
+    log_dir = args.log_dir if args.log_dir else os.path.join(args.save_dir, "logs", run_name)
     writer = SummaryWriter(log_dir=log_dir)
+    writer.add_text("config", "\n".join(f"    {k}: {v}" for k, v in sorted(vars(args).items())), 0)
 
     train_loader = build_dataloader(args)
-    validation_loader = build_dataloader(args,train_test_val='val')
+    validation_loader = build_dataloader(args, train_test_val='val', shuffle=False)
     data_shape = train_loader.dataset._get_data_shape()
     args.in_shape = data_shape
     model = build_model(args, device)

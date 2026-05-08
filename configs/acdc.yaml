@@ -1,0 +1,30 @@
+# ACDC -- cardiac MRI, ~150 training cases (5-fold split), discrete time
+# Usage: python src/train.py --config configs/acdc.yaml
+# Data env var: DATA_DIR  (must contain trn_dat.npy, val_dat.npy, trn_seg.npy, val_seg.npy)
+# See src/data_loaders/acdc_prepare.py for preprocessing.
+
+dataset: acdc
+model_type: cronos
+
+# data
+batch_size: 4
+num_workers: 4
+num_to_keep_context: 3   # number of context frames fed to the model (T-1 at most) -> have to check
+val_split: 0              # which fold to hold out as validation (0-4)
+
+# model
+base_channels: 32
+# fm_model_unet_expands: [1, 2, 4, 8]
+number_evals: 10
+training_noise: 0.01
+
+# optimization
+lr: 1.0e-4
+weight_decay: 0.01
+num_epochs: 500
+log_interval: 10
+
+# misc
+seed: 42
+device: cuda
+save_dir: checkpoints/acdc
