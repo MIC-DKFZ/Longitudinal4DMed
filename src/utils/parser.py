@@ -35,6 +35,8 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save_dir", type=str, default="checkpoints")
+    parser.add_argument("--val_split", type=int, default=0,
+                        help="Which fold to use as validation (0-4).")
     parser.add_argument("--dataset", type=str, default="isles",
                         help="Dataset to use. Only used if --dummy is not set.") # acdc, isles, lumiere, oasis
     parser.add_argument("--model_type", type=str, default="tfm")

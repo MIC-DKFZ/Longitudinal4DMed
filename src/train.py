@@ -47,9 +47,10 @@ def _log_image_grid(writer: "SummaryWriter", model, loader, device, in_shape, ep
         gt_s   = _to_slice(batch_y[0])
         lci_s  = _to_slice(lci[0])
         pred_s = _to_slice(pred[0])
-        # side-by-side: (1, H, W*3)
-        grid = torch.cat([gt_s, lci_s, pred_s], dim=-1)
-        writer.add_image("Val/GT_LCI_Pred", grid, global_step=epoch)
+        err_s  = _to_slice((pred[0] - batch_y[0]).abs())
+        # side-by-side: GT | LCI baseline | prediction | error map
+        grid = torch.cat([gt_s, lci_s, pred_s, err_s], dim=-1)
+        writer.add_image("Val/GT_LCI_Pred_Err", grid, global_step=epoch)
     except Exception:
         pass  # image logging is best-effort; never break training
 
@@ -118,7 +119,7 @@ def main() -> None:
         f"{args.model_type}_{args.dataset}"
         f"_ch{args.base_channels}"
         f"_lr{args.lr}"
-        f"_sig{args.training_noise}"
+        f"_sig{getattr(args, 'training_noise', 0.01)}"
         f"_seed{args.seed}"
         f"_{timestamp}"
     )
@@ -127,7 +128,7 @@ def main() -> None:
     writer.add_text("config", "\n".join(f"    {k}: {v}" for k, v in sorted(vars(args).items())), 0)
 
     train_loader = build_dataloader(args)
-    validation_loader = build_dataloader(args, train_test_val='val', shuffle=False)
+    validation_loader = build_dataloader(args, train_test_val='val')
     data_shape = train_loader.dataset._get_data_shape()
     args.in_shape = data_shape
     model = build_model(args, device)
@@ -154,6 +155,7 @@ def main() -> None:
         scheduler.step()
         print(f"Epoch {epoch} completed. Average loss: {avg_loss:.4f}")
         writer.add_scalar("Loss/train", avg_loss, epoch)
+        writer.add_scalar("Train/lr", optimizer.param_groups[0]["lr"], epoch)
 
         if epoch % args.log_interval == 0:
             val_result = val_step(validation_loader, model, min_val=best_val, **vars(args))
