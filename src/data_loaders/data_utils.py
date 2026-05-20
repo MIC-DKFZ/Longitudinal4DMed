@@ -9,6 +9,76 @@ from .acdc_loader import ACDCDataset
 from .isles_loader import ISLESDataset
 
 
+class BGTransformWrapper(Dataset):
+    """
+    Wraps any longitudinal dataset with batchgenerators spatial + intensity
+    augmentations.  All T frames (context + target) are stacked into a single
+    multi-channel volume so the SAME spatial transform is applied to every frame.
+    its a bit hacky, but it works. 
+    """
+
+    def __init__(self, ds: Dataset, tfm) -> None:
+        self.dataset = ds
+        self.tfm = tfm
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> dict:
+        s = self.dataset[idx]
+        t = s["target_img"]
+        c = s["context"]
+        # convert to numpy if needed
+        if isinstance(t, torch.Tensor):
+            t = t.numpy()
+        if isinstance(c, torch.Tensor):
+            c = c.numpy()
+        combined = np.concatenate([t, c], axis=0).astype(np.float32)  # (T+1, C, D, H, W)
+        T1, C, D, H, W = combined.shape
+        # reshape to (1, T1*C, D, H, W) — same spatial transform for all frames
+        out_ch = self.tfm(data=combined.reshape(1, T1 * C, D, H, W))["data"]
+        out = out_ch.reshape(T1, C, D, H, W)
+        return {
+            "target_img": torch.from_numpy(out[[0]]),
+            "context":    torch.from_numpy(out[1:]),
+            "target_seg":   s["target_seg"],
+            "context_seg":  s["context_seg"],
+            "target_time":  s["target_time"],
+            "context_time": s["context_time"],
+        }
+
+
+def build_aug_transform(image_size: tuple):
+    """Build the batchgenerators augmentation pipeline (training only)."""
+    from batchgenerators.transforms.spatial_transforms import SpatialTransform
+    from batchgenerators.transforms.noise_transforms import GaussianNoiseTransform
+    from batchgenerators.transforms.color_transforms import (
+        GammaTransform,
+        BrightnessMultiplicativeTransform,
+        ClipValueRange,
+    )
+    from batchgenerators.transforms.abstract_transforms import Compose
+
+    return Compose([
+        SpatialTransform(
+            patch_size=image_size,
+            do_elastic_deform=True, alpha=(0., 500.), sigma=(6., 10.),
+            do_rotation=True,
+            angle_x=(-15 / 180 * np.pi, 15 / 180 * np.pi),
+            angle_y=(-15 / 180 * np.pi, 15 / 180 * np.pi),
+            angle_z=(-15 / 180 * np.pi, 15 / 180 * np.pi),
+            do_scale=False, scale=(0.9, 1.1),
+            border_mode_data='nearest',
+            order_data=1,
+            random_crop=False,
+        ),
+        GaussianNoiseTransform(noise_variance=(0.0, 0.02), p_per_sample=0.3),
+        GammaTransform(gamma_range=(0.7, 1.5), invert_image=False, p_per_sample=0.3),
+        BrightnessMultiplicativeTransform(multiplier_range=(0.7, 1.3), per_channel=False, p_per_sample=0.3),
+        ClipValueRange(min=0.0, max=1.0),
+    ])
+
+
 
 
 class DummyTemporalDataset(Dataset):
@@ -100,19 +170,14 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
                 num_to_keep_context=5,
                 **vars(args)
             )
-        elif args.dataset == 'brats':
-            from .brats_semi_loader import SemiSynthLongi
-            data_dir = os.getenv("DATA_DIR", "./data/")
-            dataset = SemiSynthLongi(
-                data_dir=data_dir,
-                split=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
-            )
         else:
             raise NotImplementedError(
             "Provide your own dataset or run with --use-dummy-data to test the pipeline."
             )
+
+    if train_test_val == 'trn' and getattr(args, 'augmentation', False):
+        image_size = dataset._get_data_shape()[2:]
+        dataset = BGTransformWrapper(dataset, build_aug_transform(image_size))
 
     loader = DataLoader(
         dataset,
