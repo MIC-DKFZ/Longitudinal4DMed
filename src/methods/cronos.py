@@ -78,7 +78,7 @@ class CRONOS(nn.Module):
             filtered_kwargs = filter_kwargs(ConditionedUNet, kwargs)
             # we use a different amount of input context frames, as we want to couple the time!!
 
-            self.u_net = ConditionedUNet(dim=(in_shape[0],) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
+            self.u_net = ConditionedUNet(dim=(self.num_context,) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
                                    channel_mult=self.fm_model_unet_expands)#.to(kwargs['device'])
         elif kwargs.get('unet_type', 'diff') == 'dit':
             # TODO: add the option to implement NanoDit as well
@@ -132,7 +132,7 @@ class CRONOS(nn.Module):
         batch_y = batch_y.to(self.hparams['device'])
         time_vec = torch.concat([context_time, target_time], dim=1)
         context, processed_times = self.process_batch(batch_x, batch_y=batch_y, time_points=time_vec, max_images=self.num_context)
-        #
+        processed_times = torch.cat([processed_times, target_time.to(processed_times.device)], dim=1)
         conditioning_context = None
         image_and_condition = {'image': context, 'conditioning': conditioning_context}
         pred_y, predicted_velocity, true_velocity = self(image_and_condition, batch_y, time_points=processed_times)
@@ -147,10 +147,9 @@ class CRONOS(nn.Module):
 
         if self.scale_time_embed:
             time_points = time_points.to(batch.device)
-            last_context_time, target_time = time_points[:, -2], time_points[:, -1]
-            delta_t = target_time - last_context_time
-            # scaled_flow_time = t*delta_t + last_context_time
+        actual_target_time = time_points[:, -1:]
         context, time_points = self.process_batch(batch, time_points=time_points, max_images=self.num_context)
+        time_points = torch.cat([time_points, actual_target_time.to(time_points.device)], dim=1)
         conditioning = None
 
         def u_net_wrapper(t, x):
