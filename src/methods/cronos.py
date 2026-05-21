@@ -51,11 +51,12 @@ class CRONOS(nn.Module):
         self.mask_time = kwargs.get('mask_time', 1.0)
         self.guidance_scale = kwargs.get('guidance_scale', 3.0)
         self.fm_model_unet_expands = kwargs.get('fm_model_unet_expands', [1, 1, 2, 4])
+        self.random_inference = kwargs.get('random_inference', False)
         # remove that later todo:
         embed = 'non_zero'
         from methods.fm_utils.fm_process_utils import process_fill_empty, process_batch_non_zero #todo: add the others as well!
         if embed == 'grid':
-            self.process_batch = interpolate_images
+            self.process_batch = interpolate_images # todo:
         elif embed == 'gauss':
             self.process_batch = gaussian_smoothing
         elif embed == 'temporal_gauss':
@@ -79,13 +80,8 @@ class CRONOS(nn.Module):
 
             self.u_net = ConditionedUNet(dim=(in_shape[0],) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
                                    channel_mult=self.fm_model_unet_expands)#.to(kwargs['device'])
-
-            #self.u_net = ConditionedUNet(channel_mult=kwargs.get('fm_model_unet_expands', [1,1,2,4]),
-            #                             dim=(self.num_context, *in_shape[1:]),
-            #                             num_res_blocks=1,
-            #                             num_channels=feature_size, **filtered_kwargs)#.to(kwargs['device'])
         elif kwargs.get('unet_type', 'diff') == 'dit':
-            # from MedVP.dit_util import NanoDiT
+            # TODO: add the option to implement NanoDit as well
             patch_size = [p // 4 for p in patch_size]
             # should probably rename this
             self.u_net = NanoDiT(input_size=list(in_shape[2:]),
@@ -169,7 +165,7 @@ class CRONOS(nn.Module):
                 t = t.view(-1, 1).repeat(1, context.shape[1])
             return self.u_net(t, [x, conditioning])  # [:,[-1]]
 
-        if self.training_noise > 0:
+        if self.training_noise and self.random_inference > 0:
             # https://github.com/nZhangx/TrajectoryFlowMatching/blob/main/src/model/FM_baseline.py#L431
             current_state = context.squeeze(2)
             mask = (context.squeeze(2) > 0.05).to(torch.float)  #.detach()
@@ -187,7 +183,7 @@ class CRONOS(nn.Module):
             with torch.no_grad():
                 traj = odeint(u_net_wrapper, context.squeeze(2), t_span, atol=1e-5, rtol=1e-5,
                               adjoint_params=self.u_net.parameters())
-                val_res = traj[-1][:, -1]  #.mean(dim=1)
+                val_res = traj[-1].mean(dim=1) #[:, -1]  todo: mean or last into settings
 
         return val_res
 
