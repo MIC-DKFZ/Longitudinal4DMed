@@ -7,186 +7,12 @@ from scipy.ndimage import zoom
 from src.data_loaders.data_util_functions import filter_and_normalize, crop_3d_spatial_bounding_box
 import random
 
-class ISLEsTwo(ISLESDataLoader):
-    def __init__(self, data_name='isles', train_test_val='trn', debug: bool = True, **kwargs):
-        super(ISLEsTwo, self).__init__()
-        super(ISLESDataLoader, self).__init__()
-        # for debugging
-        # print(f"Generating {data_size} {data_name} data samples")
-        # print(growth_params, regular, sparse)
-        self.hparams = kwargs
-        self.num_patients = 0
-        self.mean = None
-        self.std = None
-        self.debug = debug
-        self.trn_val_split = 0  # between 0 and 4
-        self.frames = 7
-        self.noise = kwargs.get('data_noise', 0.0)
-        self.num_to_keep = kwargs.get('num_to_keep_context', 3)
-        print(self.debug)
-        self.train_test_val_mode = train_test_val
-        self.data_name = data_name
-        self.hparams = kwargs
-        # the data path will be later in the config file
-        # self.data_raw_path = os.environ['RAW_DATA_BR'] # "/home/n847h/E132-Rohdaten/BraTS_2020/MICCAI_BraTS2020_TrainingData/"
-        self.data_path = os.environ['DATASET_LOCATION_ISLES']
-        self.data_raw = {}
-        self.data = {}
-        self.two_dim = False
-        self.data_save = {}
-        self.counter_patient = 0
-        self.memory_efficient = True
-        if self.memory_efficient:
-            self.num_patients = 16  # = 64 +16+16 ; 369 later
-        # check if we want to load / save the data
-        self.load_data = True  # loadd the data again once the
-        print("loading data, if not we generate it: ", self.load_data)
-        if self.load_data:
-            self.load_data_from_file_single_npy()
-        else:
-            self.generate_save_data()
-            self.data = self.data_raw
-            # self.augment_data()
-        self.index_dict = {}
-        self.start_idx = {}
-        # only load them for val and test
-
-
-        if self.train_test_val_mode == 'trn':
-            self.precompute_random = False
-            self.index_dict = None
-        else:
-            self.precompute_random = True
-            self.index_dict = {}
-            self.precompute_randomness()
-        print('data loaded')
-
-    def precompute_randomness(self):
-        for i in range(self.data.shape[0]):
-            data = np.transpose(self.data[i], (3, 2, 1, 0))
-            sampled_data = data[:, np.newaxis]  # data[::5, np.newaxis] was the previous one!
-            start_idx = np.random.randint(0, len(sampled_data) - self.frames)
-            num_context_images = self.frames
-            num_to_keep = self.num_to_keep
-            if num_to_keep == num_context_images:
-                num_to_mask = 0
-            else:
-                num_to_mask = random.randint(1, num_context_images - num_to_keep)
-
-            # Shuffle indices and pick the ones to mask
-            indices = list(range(num_context_images))
-            random.shuffle(indices)
-            indices_to_mask = indices[:num_to_mask]
-            self.index_dict[i] = indices_to_mask
-            self.start_idx[i] = start_idx
-        return
-
-    def load_data_from_file_single_npy(self):
-        trn_val_tst = self.train_test_val_mode
-        val_split = self.hparams.get('val_split', 0)
-        if trn_val_tst == 'tst':
-            self.data = np.load(os.path.join(self.data_path, 'tst_isles.npy'))
-        else:
-            self.data = np.load(os.path.join(self.data_path, 'trn_isles.npy'))
-            indices = np.arange(self.data.shape[0])
-            if trn_val_tst == 'trn':
-                self.data = self.data[indices % 5 != val_split]
-            elif trn_val_tst == 'val':
-                self.data = self.data[indices % 5 == val_split]
-        # self.data = np.array([self.filter_and_normalize(case) for case in self.data])
-        return
-
-    def __getitem__(self, index):
-        data = np.transpose(self.data[index], (3, 2, 1, 0))
-        sampled_data = data[:, np.newaxis]  # data[::5, np.newaxis] was the previous one!
-
-        if self.train_test_val_mode != 'trn':
-            start_idx = self.start_idx[index]
-        else:
-            start_idx = np.random.randint(0, len(sampled_data) - self.frames)
-        context = sampled_data[start_idx:start_idx + self.frames]
-        target = sampled_data[[start_idx + self.frames]]
-        # target, context = self.data[index][:1], self.data[index][1:]
-
-        # Randomly mask some of the context images while keeping at least one
-        num_context_images = context.shape[0]
-
-        if self.train_test_val_mode != 'trn':
-            indices_to_mask = self.index_dict[index]
-            start_idx = self.start_idx[index]
-        else:
-            # Ensure at least one context image is kept
-            num_to_keep = self.num_to_keep
-            if num_to_keep == num_context_images:
-                num_to_mask = 0
-            else:
-                num_to_mask = random.randint(1, num_context_images - num_to_keep)
-
-            # Shuffle indices and pick the ones to mask
-            indices = list(range(num_context_images))
-            random.shuffle(indices)
-            indices_to_mask = indices[:num_to_mask]
-
-            # Apply masking by setting the selected slices to zero
-        for i in indices_to_mask:
-            context[i] = np.zeros_like(context[i])
-
-        # Add small noise to the context (normally distributed noise)
-        noise = np.random.randn(*context.shape) * self.noise
-        context = context + noise
-        context = np.float32(context)
-        time_vector = np.linspace(0, 1, context.shape[0] + 1, dtype=np.float32)
-        # test if time vector is empty:
-        if not np.all(np.isfinite(context)):
-            print(f"[Dataset] context has NaN/Inf at index {index}")
-            print("Context shape:", context.shape)
-            print("Time vector:", time_vector)
-            raise ValueError("Invalid context values")
-
-        if not np.all(np.diff(time_vector) > 0):
-            print(f"[Dataset] Non-monotonic time at index {index}: {time_vector}")
-            raise ValueError("Time vector is not increasing")
-        return {'target_img': target, 'context': context, 'target_seg': np.ones(shape=target.shape), 'context_seg': np.ones(shape=target.shape),
-                "target_time": time_vector[[-1]],"context_time": time_vector[:-1]}
-
-    def generate_save_data(self):
-        '''
-        Generate and save data: we load Brats data, pick a slice (for now), and save it
-        '''
-        # get maximal number of patients
-        patient_counter = 0
-        if self.train_test_val_mode == 'trn':
-            data_dir = 'data/isles/isles24_train_a/raw_data'
-        else:
-            data_dir = 'data/isles/isles24_train_b/raw_data'
-        for patient in os.listdir(data_dir):
-            # have the debug option
-            if self.debug and patient_counter > 4:
-                print(patient_counter, self.debug)
-                break
-            print(f'Generating data for patient {patient}')
-            patient_dir = os.path.join(data_dir, patient, 'ses-01')
-            patient_images_ct = os.listdir(patient_dir)
-            patient_image_ctp_str = [modality for modality in patient_images_ct if 'ctp' in modality][0]
-            img = nib.load(os.path.join(patient_dir, patient_image_ctp_str)).get_fdata().astype(np.float32)
-            img = self.filter_and_normalize(img)
-            img[img > 0.80] = 0
-            # crop around the non-important slices
-            img = self.crop_3d_spatial_bounding_box(img)
-            resize_shape = (128, 128, 16, 32)
-            img_shaped = zoom(img, zoom=np.divide(resize_shape, img.shape))
-            self.data_raw[patient_counter] = img_shaped
-            print(img.shape)
-            patient_counter += 1
-            # Import images from directory
-        print('finished generating data')
-
-class ISLESDatasetNew(Dataset):
+class ISLESDataset(Dataset):
     '''
     Note, this is the updated ISLES dataset class!
     '''
     def __init__(self, data_name='isles', data_dir=None, train_test_val='trn', debug: bool = True, **kwargs):
-        super(ISLESDatasetNew, self).__init__()
+        super(ISLESDataset, self).__init__()
         # for debugging
         # print(f"Generating {data_size} {data_name} data samples")
         # print(growth_params, regular, sparse)
@@ -212,9 +38,10 @@ class ISLESDatasetNew(Dataset):
         if self.paper_process:
             # use the pre-processing of the official paper, which may not be ideal, we added a more complex one
             # note that the newer version needs different hyperparameters
-            print(32*'#')
+            print(64*'#')
             print("Using the paper pre-processing, see dataloader for details")
-            print(32*'#')
+            print("Only works for the pre-processing")
+            print(64*'#')
         # check if we want to load / save the data
         self.load_data = kwargs.get('load_data_isles', True)  # load the data again once the
         print(f"loading data: {self.load_data}, else: we generate it and save it")

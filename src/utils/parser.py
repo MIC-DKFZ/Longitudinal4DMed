@@ -18,7 +18,7 @@ def get_args() -> argparse.Namespace:
 
     # model
     parser.add_argument("--in-channels", type=int, default=1)
-    parser.add_argument("--base-channels", type=int, default=8)
+    parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--num-levels", type=int, default=4,
                         help="Number of down/up levels in the UNet (depends on your implementation).")
     parser.add_argument('--number_evals', type=int, default=10)
@@ -28,7 +28,7 @@ def get_args() -> argparse.Namespace:
     # optimization
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
-    parser.add_argument("--num-epochs", type=int, default=250)
+    parser.add_argument("--num-epochs", type=int, default=500)
     parser.add_argument("--log-interval", type=int, default=10)
 
     # misc
@@ -39,7 +39,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=str, default="isles",
                         help="Dataset to use. Only used if --dummy is not set.") # acdc, isles, lumiere, oasis
     parser.add_argument("--model_type", type=str, default="tfm")
-    parser.add_argument("--fm_model_unet_expands", nargs='+', type=int, default=[1, 1, 1, 1])
+    parser.add_argument("--fm_model_unet_expands", nargs='+', type=int, default=[1, 1, 2, 4])
     parser.add_argument("--log_dir", type=str, default=None,
                         help="TensorBoard log directory. Defaults to <save_dir>/logs.")
     parser.add_argument("--dummy", action="store_true",
