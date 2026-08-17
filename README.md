@@ -1,15 +1,15 @@
-# CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series
+[![arXiv TFM](https://img.shields.io/badge/arXiv-2508.21580-b31b1b.svg)](https://arxiv.org/abs/2508.21580)
+[![arXiv CRONOS](https://img.shields.io/badge/arXiv-2512.16577-b31b1b.svg)](https://arxiv.org/abs/2512.16577)
+[![ICLR 2026](https://img.shields.io/badge/ICLR-2026-blue)](https://iclr.cc/virtual/2026/poster/10008928)
+[![CVPRW 2025](https://img.shields.io/badge/CVPRW%202025-Syndata4CV-1b3d6d)](https://openreview.net/forum?id=sRh6ZMebXJ)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](license.txt)
+
+# Longitudinal4DMed: Models and Tools for Longitudinal  and Spatio Temporal Medical Imaging
 
 
-This repository is the official implementation of **CRONOS** and the continuations **Temporal Flow Matching (TFM)**, a spatio-temporal and generative framework for longitudinal medical imaging.   
+This repository is the official implementation of **CRONOS** (ICLR) and the continuations **Temporal Flow Matching (TFM)**, a spatio-temporal and generative 
+framework for longitudinal medical imaging. The repository also hosts LAUGEN, a method for generating longitudinal sequences from single images (Syndata4CV @ CVPR 2025).
 
-The method is presented in the papers:
-
-[Temporal Flow Matching for Learning Spatio-Temporal Trajectories in 4D Longitudinal Medical Imaging](https://arxiv.org/abs/2508.21580).
-
-[CRONOS: Continuous Time Reconstruction for 4D Medical Longitudinal Series](https://arxiv.org/abs/2512.16577).
-
-CRONOS has been accepted at ICLR 2026! 
 
 ## Features
 
@@ -23,14 +23,13 @@ CRONOS has been accepted at ICLR 2026!
 
 ## Status
 
-This repository is still WIP. 
-Regular updates will follow soon!
-
+Actively maintained. Recently added: additional dataloaders.
+Coming soon: LAUGEN longitudinal augmentations.
 ## Installation
 Clone this repository and install the required packages:
 ```bash
-git clone https://github.com/MIC-DKFZ/Temporal-Flow-Matching.git
-cd Temporal-Flow-Matching
+git clone https://github.com/MIC-DKFZ/Longitudinal4DMed.git
+cd Longitudinal4DMed
 pip install -e .
 ```
 
