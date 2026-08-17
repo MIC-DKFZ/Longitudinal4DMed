@@ -15,8 +15,8 @@ from torch.utils.data import Dataset, DataLoader
 import datetime
 from pathlib import Path
 from utils.validation_utils import val_step, _extract_batch, _forward_and_reshape, get_last_context_image_baseline
-from src.methods.temporal_flow_matching_method import TemporalFlowMatching
-from src.methods.cronos import CRONOS
+from methods.temporal_flow_matching_method import TemporalFlowMatching
+from methods.cronos import CRONOS
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)

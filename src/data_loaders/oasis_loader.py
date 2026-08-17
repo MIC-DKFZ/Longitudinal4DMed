@@ -1,10 +1,11 @@
 from torch.utils.data import Dataset
 import os
 import numpy as np
+from scipy.ndimage import generate_binary_structure, binary_dilation, binary_erosion
 import pandas as pd
 import nibabel as nib
 from scipy.ndimage import zoom
-from src.data_loaders.data_util_functions import crop_3d_spatial_bounding_box, filter_and_normalize
+from .data_util_functions import crop_3d_spatial_bounding_box, filter_and_normalize
 
 
 class OASISDataset(Dataset):
@@ -22,6 +23,38 @@ class OASISDataset(Dataset):
         self.in_shape = kwargs.get('in_shape', (5, 1, 128, 128, 160))
         #self.img_shape = kwargs.get('in_shape', (5, 1, 96, 96, 96))[2:]
         #self.num_times = kwargs.get('in_shape', (5, 1, 96, 96, 96))[0]
+
+        # target_seg (structure change mask) dilation radius in voxels — widens the
+        # mask by this many binary_dilation iterations before returning it. 0 = off.
+        # TODO: review comment
+        self.seg_diff_dilate_px = int(kwargs.get('seg_diff_dilate_px', 0))
+        # target_seg base definition: 'diff' (default) = XOR of a structure's binary
+        # classification between the last context visit and the target visit; 'edge'
+        # = union of the structure's own boundary shell (1-voxel erosion rim) at both
+        # visits — flags where the structure's boundary IS, not just voxels that
+        # flipped class. seg_diff_dilate_px still applies on top of either.
+        # TODO: review comment
+        self.seg_target_mode = kwargs.get('seg_target_mode', 'diff')
+        assert self.seg_target_mode in ('diff', 'edge'), \
+            f"seg_target_mode must be 'diff' or 'edge', got {self.seg_target_mode!r}"
+        # Which anatomical structure's change defines target_seg: 'csf' (FSL FAST,
+        # label 1), 'hipp' (FSL FIRST, labels 17=L_Hipp/53=R_Hipp), or 'multi' — a
+        # continuous per-voxel weighted sum of both structures' change masks (see
+        # seg_weight_csf/seg_weight_hipp below). Both structures are always loaded
+        # (see build_oasis_cases) so switching structure/mode needs no extra
+        # data-loading pass. Regardless of this setting, __getitem__ also returns
+        # target_seg_csf/target_seg_hipp (each structure's own raw mask) so eval.py
+        # can report per-structure metrics even when 'multi' combines them for the
+        # training loss. See src/data_loaders/oasis_prepare.py for how these
+        # per-visit segmentation volumes get produced from raw OASIS-2 T1s.
+        # TODO: review comment
+        self.seg_target_structure = kwargs.get('seg_target_structure', 'csf')
+        assert self.seg_target_structure in ('csf', 'hipp', 'multi'), \
+            f"seg_target_structure must be 'csf', 'hipp', or 'multi', got {self.seg_target_structure!r}"
+        # Per-structure weights, only used when seg_target_structure == 'multi'.
+        self.seg_weight_csf = float(kwargs.get('seg_weight_csf', 1.0))
+        self.seg_weight_hipp = float(kwargs.get('seg_weight_hipp', 1.0))
+
         self.data = []
         self.max_time = 0
         self.build_oasis_cases()
@@ -85,6 +118,8 @@ class OASISDataset(Dataset):
 
             patient_dict = {}
             patient_arr = np.array([])
+            seg_arr = np.array([])
+            hipp_arr = np.array([])
             date_arr = []
             age_arr = []
             for v_idx, visit in enumerate(visit_dirs):
@@ -114,21 +149,62 @@ class OASISDataset(Dataset):
                 age_arr.append(age_visit)
                 img -= np.min(img)
                 img /= np.max(img)  # simple normalization
+
+                # Real tissue segmentation (FSL FAST — see oasis_prepare.py), same
+                # (H,W,D) grid as t1_brain_MNI.nii.gz — 0=bg, 1=CSF, 2=GM, 3=WM.
+                # TODO: review comment
+                seg_path = visit_dir + '/t1_seg_seg.nii.gz'
+                seg_img = nib.load(seg_path).get_fdata().astype(np.float32) if os.path.isfile(seg_path) \
+                    else np.zeros_like(img)
+
+                # Hippocampus segmentation (FSL FIRST — see oasis_prepare.py), same
+                # (H,W,D) grid — 0=bg, 17=L_Hipp, 53=R_Hipp (standard FIRST label IDs).
+                # Loaded unconditionally (like seg_img above) regardless of
+                # seg_target_structure, so switching structure needs no second pass.
+                # TODO: review comment
+                hipp_path = visit_dir + '/t1_first_hipp_all_fast_firstseg.nii.gz'
+                hipp_img = nib.load(hipp_path).get_fdata().astype(np.float32) if os.path.isfile(hipp_path) \
+                    else np.zeros_like(img)
+
                 # check if array is empty
                 if patient_arr.size == 0:
                     patient_arr = img[...,None]
+                    seg_arr = seg_img[..., None]
+                    hipp_arr = hipp_img[..., None]
                 else:
                     patient_arr = np.concatenate((patient_arr, img[...,None]), axis=-1)
+                    seg_arr = np.concatenate((seg_arr, seg_img[..., None]), axis=-1)
+                    hipp_arr = np.concatenate((hipp_arr, hipp_img[..., None]), axis=-1)
             target_time_length, C, tgt_D, tgt_H, tgt_W = self.in_shape
-            # potentially crop:
-            imgs = crop_3d_spatial_bounding_box(patient_arr, threshold=0.01)
+            # Compute the bounding box ONCE from the image intensities, then apply the
+            # SAME indices to seg/hipp — recomputing a box independently from a label
+            # map's own values would give an inconsistent crop, since label==0
+            # background doesn't necessarily align with img<=threshold background.
+            # TODO: review comment
+            mask = np.max(patient_arr, axis=3) > 0.01
+            w_idx = np.any(mask, axis=(1, 2)); h_idx = np.any(mask, axis=(0, 2)); d_idx = np.any(mask, axis=(0, 1))
+            min_w, max_w = np.where(w_idx)[0][[0, -1]]
+            min_h, max_h = np.where(h_idx)[0][[0, -1]]
+            min_d, max_d = np.where(d_idx)[0][[0, -1]]
+            imgs = patient_arr[min_w:max_w + 1, min_h:max_h + 1, min_d:max_d + 1, :]
+            segs = seg_arr[min_w:max_w + 1, min_h:max_h + 1, min_d:max_d + 1, :]
+            hipps = hipp_arr[min_w:max_w + 1, min_h:max_h + 1, min_d:max_d + 1, :]
             # todo: the option for a random crop, or for reshaping to the desired size
             zooming = True
             if zooming:
-                imgs= self.resize_4d(imgs, (tgt_D, tgt_H, tgt_W), order=1)
+                imgs = self.resize_4d(imgs, (tgt_D, tgt_H, tgt_W), order=1)
+                # nearest-neighbor for label maps — linear interpolation (order=1)
+                # would blur discrete tissue labels into meaningless fractional values.
+                # TODO: review comment
+                segs = self.resize_4d(segs, (tgt_D, tgt_H, tgt_W), order=0)
+                hipps = self.resize_4d(hipps, (tgt_D, tgt_H, tgt_W), order=0)
             else:
                 imgs = self.random_crop(imgs, tgt_D, tgt_H, tgt_W)
+                segs = self.random_crop(segs, tgt_D, tgt_H, tgt_W)
+                hipps = self.random_crop(hipps, tgt_D, tgt_H, tgt_W)
             patient_dict['patient_arr'] = imgs
+            patient_dict['seg_arr'] = segs
+            patient_dict['hipp_arr'] = hipps
             patient_dict['subj_id'] = subj
             patient_dict['dates'] = date_arr
             patient_dict['ages'] = age_arr
@@ -174,6 +250,12 @@ class OASISDataset(Dataset):
         imgs = np.transpose(imgs_4d, (3, 2, 0, 1)).astype(np.float32)
         T, D, H, W = imgs.shape
 
+        segs_4d = sample['seg_arr'][..., order]  # same time-sort as imgs_4d
+        segs = np.transpose(segs_4d, (3, 2, 0, 1)).astype(np.float32)  # (T, D, H, W)
+
+        hipps_4d = sample['hipp_arr'][..., order]
+        hipps = np.transpose(hipps_4d, (3, 2, 0, 1)).astype(np.float32)  # (T, D, H, W)
+
         # split context / target
         target_time_length, C, tgt_D, tgt_H, tgt_W = self.in_shape
         # potentially crop:
@@ -181,6 +263,16 @@ class OASISDataset(Dataset):
         imgs = self.filter_and_normalize(imgs, lower_percentile=1, upper_percentile=99)
         target = imgs[-1]  # (D, H, W)
         context = imgs[:-1]  # (T-1, D, H, W)
+        # Mirror the SAME crop treatment for segs/hipps as imgs just got above — random_crop's
+        # axis handling only produces the right final shape once combined with the pad step
+        # below; extracting the label maps before this point would end up misaligned.
+        # TODO: review comment
+        segs = self.random_crop(segs, tgt_D, tgt_H, tgt_W)
+        target_seg_labels = segs[-1]      # (D, H, W) tissue label map at target visit
+        last_ctx_seg_labels = segs[-2]    # (D, H, W) tissue label map at last context visit
+        hipps = self.random_crop(hipps, tgt_D, tgt_H, tgt_W)
+        target_hipp_labels = hipps[-1]      # (D, H, W) hippocampus label map at target visit
+        last_ctx_hipp_labels = hipps[-2]    # (D, H, W) hippocampus label map at last context visit
 
         # times in [0, 1]
         times = dates / max(self.max_time, 1e-6)
@@ -200,6 +292,18 @@ class OASISDataset(Dataset):
                 context = np.pad(context,
                                  ((0, 0), (0, pad_d), (0, pad_h), (0, pad_w)),
                                  mode="constant")
+            target_seg_labels = np.pad(target_seg_labels,
+                                       ((0, pad_d), (0, pad_h), (0, pad_w)),
+                                       mode="constant")
+            last_ctx_seg_labels = np.pad(last_ctx_seg_labels,
+                                         ((0, pad_d), (0, pad_h), (0, pad_w)),
+                                         mode="constant")
+            target_hipp_labels = np.pad(target_hipp_labels,
+                                        ((0, pad_d), (0, pad_h), (0, pad_w)),
+                                        mode="constant")
+            last_ctx_hipp_labels = np.pad(last_ctx_hipp_labels,
+                                          ((0, pad_d), (0, pad_h), (0, pad_w)),
+                                          mode="constant")
 
         # context = self.random_crop(context, tgt_D, tgt_H, tgt_W)
         # target = self.random_crop(target, tgt_D, tgt_H, tgt_W)
@@ -224,13 +328,57 @@ class OASISDataset(Dataset):
             context = context[-target_time_length:]
             context_time = context_time[-target_time_length:]
 
-        # fake segs = zeros
-        target_seg = np.zeros_like(target, dtype=np.float32)
+        # Per-structure change mask (real FSL segmentation, not the old all-zero
+        # placeholder): 'csf' (FSL FAST, label 1) — CSF/ventricle expansion, the
+        # classic aging signal; 'hipp' (FSL FIRST, labels 17=L_Hipp/53=R_Hipp) — the
+        # region most specifically affected by Alzheimer's. Computed for BOTH
+        # structures unconditionally so eval.py can report per-structure metrics
+        # (target_seg_csf/target_seg_hipp below) regardless of which one(s) actually
+        # feed the training loss via target_seg.
+        # TODO: review comment
+        def _change_mask(last_ctx_bool, target_bool):
+            if self.seg_target_mode == 'edge':
+                struct = generate_binary_structure(3, 1)
+                edge_ctx = last_ctx_bool & ~binary_erosion(last_ctx_bool, structure=struct)
+                edge_tgt = target_bool & ~binary_erosion(target_bool, structure=struct)
+                mask = edge_ctx | edge_tgt
+            else:
+                mask = (last_ctx_bool != target_bool)
+            if self.seg_diff_dilate_px > 0:
+                mask = binary_dilation(mask, structure=generate_binary_structure(3, 1),
+                                       iterations=self.seg_diff_dilate_px)
+            return mask
+
+        csf_change = _change_mask(last_ctx_seg_labels == 1, target_seg_labels == 1)
+        hipp_change = _change_mask(np.isin(last_ctx_hipp_labels, [17, 53]),
+                                   np.isin(target_hipp_labels, [17, 53]))
+
+        if self.seg_target_structure == 'multi':
+            # Safety: verify there's real signal to weight before trusting the
+            # combination — an empty union means both structures' segmentation were
+            # missing/degenerate for this sample (e.g. a failed FIRST run), not that
+            # there's genuinely nothing to forecast. Doesn't raise (a missing/zero
+            # segmentation for one sample shouldn't crash training), just surfaces
+            # it loudly since it would otherwise silently look like a "no change" sample.
+            # TODO: review comment
+            union = csf_change | hipp_change
+            if not union.any():
+                print(f"[OASISDataset] WARNING: empty csf+hipp union for "
+                     f"subj={sample.get('subj_id', '?')} — target_seg will be all-zero "
+                     f"this sample (check both structures' segmentation files exist).")
+            target_seg = (self.seg_weight_csf * csf_change.astype(np.float32)
+                         + self.seg_weight_hipp * hipp_change.astype(np.float32))
+        elif self.seg_target_structure == 'hipp':
+            target_seg = hipp_change.astype(np.float32)
+        else:
+            target_seg = csf_change.astype(np.float32)
         context_seg = np.zeros_like(context, dtype=np.float32)
 
         # add channel dim
         target = target[np.newaxis, np.newaxis, ...]  # (1, 1, D, H, W)
         target_seg = target_seg[np.newaxis, np.newaxis, ...]
+        target_seg_csf = csf_change.astype(np.float32)[np.newaxis, np.newaxis, ...]
+        target_seg_hipp = hipp_change.astype(np.float32)[np.newaxis, np.newaxis, ...]
         context = context[:, np.newaxis, ...]  # (T-1, 1, D, H, W)
         context_seg = context_seg[:, np.newaxis, ...]
 
@@ -238,6 +386,11 @@ class OASISDataset(Dataset):
             "target_img": target.astype(np.float32),
             "context": context.astype(np.float32),
             "target_seg": target_seg.astype(np.float32),
+            # Per-structure masks, always present regardless of seg_target_structure,
+            # so eval.py can optionally report per-structure seg-masked metrics.
+            # TODO: review comment
+            "target_seg_csf": target_seg_csf,
+            "target_seg_hipp": target_seg_hipp,
             "context_seg": context_seg.astype(np.float32),
             "target_time": target_time.astype(np.float32),
             "context_time": context_time.astype(np.float32),

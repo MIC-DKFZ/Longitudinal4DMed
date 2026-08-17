@@ -12,11 +12,9 @@ from tqdm import tqdm
 from torchdiffeq import odeint_adjoint as odeint
 from torchsde import sdeint
 from torchdyn.models import NeuralODE
-from torchcfm.conditional_flow_matching import *
+from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
 from .fm_utils.image_cond_unet import ConditionedUNet
-import torch
-from torchdiffeq import odeint, odeint_adjoint
-from torch import nn
+from .fm_utils.fm_process_utils import compute_roi_term
 # just for saving weights easily
 import os
 
@@ -90,6 +88,7 @@ class CRONOS(nn.Module):
             raise ValueError('unknown context type')
         self.fm = ExactOptimalTransportConditionalFlowMatcher(sigma=self.training_noise)
         self.criterion = nn.MSELoss()
+        self.lambda_roi_seg = kwargs.get('lambda_roi_seg', 0.0)
 
     def forward(self, batch_x, batch_y=None, time_points=None, give_vf=False, **kwargs):
         context_tensor = batch_x['image']
@@ -137,7 +136,13 @@ class CRONOS(nn.Module):
         image_and_condition = {'image': context, 'conditioning': conditioning_context}
         pred_y, predicted_velocity, true_velocity = self(image_and_condition, batch_y, time_points=processed_times)
         # do the contrastive stuff?
-        loss = self.criterion(true_velocity.to((self.hparams['device'])), predicted_velocity.to(self.hparams['device']))
+        true_velocity = true_velocity.to(self.hparams['device'])
+        predicted_velocity = predicted_velocity.to(self.hparams['device'])
+        if self.lambda_roi_seg > 0:
+            per_voxel_loss = F.mse_loss(predicted_velocity, true_velocity, reduction='none')
+            loss = per_voxel_loss.mean() + self.lambda_roi_seg * compute_roi_term(per_voxel_loss, batch_y_seg)
+        else:
+            loss = self.criterion(true_velocity, predicted_velocity)
         return loss
 
     def validation_step(self, batch, batch_idx=None, time_points=None):

@@ -24,6 +24,11 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('--number_evals', type=int, default=10)
     # augmentaion flag
     parser.add_argument('--augmentation', action='store_true', help='If set, apply data augmentation during training.')
+    parser.add_argument('--lambda_roi_seg', type=float, default=0.0,
+                        help='Weight for an additive ROI-weighted loss term computed on real '
+                             'target_seg masks (0 = disabled, the default). Upweights the '
+                             'segmented region on top of the normal full-image loss, rather '
+                             'than masking the rest of the image out.')
 
     # optimization
     parser.add_argument("--lr", type=float, default=1e-4)

@@ -24,25 +24,47 @@ class BGTransformWrapper(Dataset):
     def __len__(self) -> int:
         return len(self.dataset)
 
+    def _get_data_shape(self):
+        return self.dataset._get_data_shape()
+
     def __getitem__(self, idx: int) -> dict:
         s = self.dataset[idx]
-        t = s["target_img"]
-        c = s["context"]
-        # convert to numpy if needed
-        if isinstance(t, torch.Tensor):
-            t = t.numpy()
-        if isinstance(c, torch.Tensor):
-            c = c.numpy()
+
+        def _to_numpy(x):
+            return x.numpy() if isinstance(x, torch.Tensor) else np.asarray(x)
+
+        t, c = _to_numpy(s["target_img"]), _to_numpy(s["context"])
+        t_seg, c_seg = _to_numpy(s["target_seg"]), _to_numpy(s["context_seg"])
+
         combined = np.concatenate([t, c], axis=0).astype(np.float32)  # (T+1, C, D, H, W)
         T1, C, D, H, W = combined.shape
-        # reshape to (1, T1*C, D, H, W) — same spatial transform for all frames
-        out_ch = self.tfm(data=combined.reshape(1, T1 * C, D, H, W))["data"]
-        out = out_ch.reshape(T1, C, D, H, W)
+
+        # target_seg/context_seg must go through the SAME spatial transform as the
+        # images (rotation/elastic-deform), via batchgenerators' separate seg=
+        # argument, so they get nearest-neighbor interpolation (order_seg=0) instead
+        # of the intensity transforms (noise/gamma/brightness) that would corrupt
+        # binary mask values. Seg shape isn't uniform across datasets (ACDC's is a
+        # bare (D,H,W) volume; others match target_img's full (T',C,D,H,W) shape) —
+        # flatten each into a generic (K, D, H, W) channel stack keyed only by the
+        # spatial dims shared with combined, then reshape back after the transform.
+        # TODO: review comment
+        t_seg_shape, c_seg_shape = t_seg.shape, c_seg.shape
+        t_seg_flat = t_seg.astype(np.float32).reshape(-1, D, H, W)
+        c_seg_flat = c_seg.astype(np.float32).reshape(-1, D, H, W)
+        seg_combined = np.concatenate([t_seg_flat, c_seg_flat], axis=0)[None]  # (1, K, D, H, W)
+        k_t = t_seg_flat.shape[0]
+
+        result = self.tfm(data=combined.reshape(1, T1 * C, D, H, W), seg=seg_combined)
+        out = result["data"].reshape(T1, C, D, H, W)
+        seg_out = result["seg"][0]  # (K, D, H, W)
+        target_seg = seg_out[:k_t].reshape(t_seg_shape)
+        context_seg = seg_out[k_t:].reshape(c_seg_shape)
+
         return {
             "target_img": torch.from_numpy(out[[0]]),
             "context":    torch.from_numpy(out[1:]),
-            "target_seg":   s["target_seg"],
-            "context_seg":  s["context_seg"],
+            "target_seg":   torch.from_numpy(target_seg.astype(np.float32)),
+            "context_seg":  torch.from_numpy(context_seg.astype(np.float32)),
             "target_time":  s["target_time"],
             "context_time": s["context_time"],
         }
@@ -134,6 +156,8 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
     if args.dummy:
         dataset = DummyTemporalDataset()
     else:
+        kwargs = dict(vars(args))
+        kwargs.setdefault('num_to_keep_context', 5)
         if args.dataset == 'acdc':
             data_dir = os.getenv("DATA_DIR", "./data/")
             local_data_path_folder = 'ACDC'
@@ -141,34 +165,38 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
             dataset = ACDCDataset(
                 data_dir=data_dir,
                 split=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
+                **kwargs
             )
         elif args.dataset == 'isles':
             data_dir = os.getenv("DATA_DIR", "./data/")
             dataset = ISLESDataset(
                 data_dir=data_dir,
                 train_test_val=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
+                **kwargs
             )
         elif args.dataset == 'lumiere':
             from .lumiere_loader import LumiereDataset
             data_dir = os.getenv("DATA_DIR", "./data/")
             dataset = LumiereDataset(
                 data_dir=data_dir,
-                split=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
+                train_test_val=train_test_val,
+                **kwargs
             )
         elif args.dataset == 'oasis':
             from .oasis_loader import OASISDataset
             data_dir = os.getenv("DATA_DIR", "./data/")
             dataset = OASISDataset(
                 data_dir=data_dir,
-                split=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
+                train_test_val=train_test_val,
+                **kwargs
+            )
+        elif args.dataset == 'aimi':
+            from .aimi_loader import AimiDataset
+            data_dir = os.getenv("DATASET_LOCATION_AIMI", "./data/aimi")
+            dataset = AimiDataset(
+                data_dir=data_dir,
+                train_test_val=train_test_val,
+                **kwargs
             )
         else:
             raise NotImplementedError(

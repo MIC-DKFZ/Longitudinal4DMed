@@ -12,11 +12,9 @@ from tqdm import tqdm
 from torchdiffeq import odeint_adjoint as odeint
 from torchsde import sdeint
 from torchdyn.models import NeuralODE
-from torchcfm.conditional_flow_matching import *
+from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
 from .fm_utils.unet_wrapper import UNetModelWrapper as UNetModel
-import torch
-from torchdiffeq import odeint, odeint_adjoint
-from torch import nn
+from .fm_utils.fm_process_utils import compute_roi_term
 
 
 class torch_wrapper(torch.nn.Module):
@@ -72,6 +70,7 @@ class TemporalFlowMatching(nn.Module):
         self.hparams = kwargs
         self.fill_context = kwargs.get('fill_context', 1) > 0  # again, the argparser does not recognize False??
         self.mask_missing = kwargs.get('mask_missing', False)
+        self.lambda_roi_seg = kwargs.get('lambda_roi_seg', 0.0)
         self.aggregation_mode = kwargs.get('aggregation_mode', 'mean')
         # swap around later??
         self.noise = 0.00
@@ -130,7 +129,11 @@ class TemporalFlowMatching(nn.Module):
             mask = batch_x.sum(dim=(2, 3, 4, 5)) > 1
             mask = mask[(...,) + (None,) * (vt.ndim - mask.ndim)]
             vt, ut = vt * mask, ut * mask
-        loss = self.criterion(vt, ut)
+        if self.lambda_roi_seg > 0:
+            per_voxel_loss = F.mse_loss(vt, ut, reduction='none')
+            loss = per_voxel_loss.mean() + self.lambda_roi_seg * compute_roi_term(per_voxel_loss, batch_y_seg)
+        else:
+            loss = self.criterion(vt, ut)
         # loss += self.criterion(vt.to(device)[:, -1], ut.to(device)[:, -1]) * self.scale_last_flow
         return loss
 

@@ -1,0 +1,21 @@
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+torchdiffeq>=0.2.3
+torchdyn>=1.0.4
+torchcfm>=0.1.0
+torchmetrics>=1.0.0
+torchsde>=0.2.5
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+imageio>=2.27.0
+tqdm>=4.65.0
+nibabel>=5.0.0
+tensorboard>=2.13.0
+
+# Optional — comment out if not needed
+# monai-generative  # for perceptual (LPIPS) loss
+# torcheval         # for FID metric
+# opencv-python     # for .avi video loading (aimi_loader)

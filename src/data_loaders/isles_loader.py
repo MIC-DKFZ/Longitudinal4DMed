@@ -4,7 +4,7 @@ import numpy as np
 import nibabel as nib
 from scipy.ndimage import zoom
 
-from src.data_loaders.data_util_functions import filter_and_normalize, crop_3d_spatial_bounding_box
+from .data_util_functions import filter_and_normalize, crop_3d_spatial_bounding_box
 import random
 
 class ISLESDataset(Dataset):
@@ -42,10 +42,42 @@ class ISLESDataset(Dataset):
             print("Using the paper pre-processing, see dataloader for details")
             print("Only works for the pre-processing")
             print(64*'#')
+
+        # Real, per-structure segmentation target: a CBF/CBV perfusion-abnormality ROI
+        # mask (percentile-threshold over the ISLES-2024 challenge's own perfusion maps
+        # — no extra tooling needed, unlike OASIS's FSL FAST/FIRST dependency), plus the
+        # challenge's own expert lesion_mask/lvo_mask annotations, exposed as
+        # target_seg_lesion/target_seg_lvo for eval.py. Requires data prepared via the
+        # per-patient isles3/npy_data/<patient>.npz layout (see isles_prepare.py) — the
+        # old single flat trn_m_isles.npy/tst_m_isles.npy layout has no per-patient
+        # segmentation at all, so 'real' mode automatically falls back to the
+        # all-ones placeholder when that newer per-patient data isn't found.
+        # TODO: review comment
+        self.seg_target_mode = kwargs.get('isles_seg_mode', 'real')
+        assert self.seg_target_mode in ('real', 'placeholder'), \
+            f"isles_seg_mode must be 'real' or 'placeholder', got {self.seg_target_mode!r}"
+        self.perf_percentile = kwargs.get('perf_percentile', 98)
+        self._npz_dir = os.path.join(self.data_path, 'isles3', 'npy_data')
+        self._npz_mode = self.seg_target_mode == 'real' and os.path.isdir(self._npz_dir) and \
+            any(f.endswith('.npz') for f in os.listdir(self._npz_dir))
+
+        if self._npz_mode:
+            print("[ISLESDataset] Using a real CBF/CBV perfusion-based segmentation target "
+                  "(target_seg) plus expert lesion_mask/lvo_mask. Note: the published "
+                  "TFM/CRONOS papers' ISLES numbers were produced with an all-ones placeholder "
+                  "instead — pass isles_seg_mode='placeholder' to reproduce that exactly.")
+        else:
+            print(f"[ISLESDataset] No per-patient .npz segmentation data found at "
+                  f"{self._npz_dir} — falling back to the all-ones placeholder target_seg "
+                  "(this matches what the published TFM/CRONOS papers used for ISLES). Run "
+                  "isles_prepare.py to enable the real CBF/CBV perfusion-based segmentation target.")
+
         # check if we want to load / save the data
         self.load_data = kwargs.get('load_data_isles', True)  # load the data again once the
         print(f"loading data: {self.load_data}, else: we generate it and save it")
-        if self.load_data:
+        if self._npz_mode:
+            self.load_data_from_npz_dir()
+        elif self.load_data:
             self.load_data_from_file_single_npy()
         else:
             self.generate_save_data()
@@ -68,7 +100,10 @@ class ISLESDataset(Dataset):
         else:
             self.precompute_random = True
             self.index_dict = {}
-            self.precompute_randomness()
+            if self._npz_mode:
+                self.precompute_randomness_npz()
+            else:
+                self.precompute_randomness()
         print('data loaded')
 
     def crop_3d_spatial_bounding_box(self, img, threshold=0.02):
@@ -144,6 +179,159 @@ class ISLESDataset(Dataset):
         # self.data = np.array([self.filter_and_normalize(case) for case in self.data])
         return
 
+    def load_data_from_npz_dir(self):
+        """Per-patient .npz layout (see isles_prepare.py): each file holds
+        ctp/cbf/cbv/lvo_mask/lesion_mask/cow_mask for one patient, loaded lazily
+        in __getitem__ rather than concatenated into one array up front."""
+        all_patients = sorted([
+            os.path.join(self._npz_dir, f) for f in os.listdir(self._npz_dir) if f.endswith('.npz')
+        ])
+        indices = np.arange(len(all_patients))
+        val_split = self.hparams.get('val_split', 0)
+        trn_val_tst = self.train_test_val_mode
+        if trn_val_tst == 'tst':
+            selected = [all_patients[i] for i in indices if i % 5 == (val_split + 1) % 5]
+        elif trn_val_tst == 'trn':
+            selected = [all_patients[i] for i in indices if i % 5 != val_split and i % 5 != (val_split + 1) % 5]
+        else:  # 'val'
+            selected = [all_patients[i] for i in indices if i % 5 == val_split]
+        self.data = selected
+        print(f'  {trn_val_tst}: {len(self.data)} patients (npz mode)')
+
+    def _make_perfusion_mask(self, cbf, cbv):
+        """Binary ROI mask: voxels above perf_percentile in CBF OR CBV (positive voxels only)."""
+        p = self.perf_percentile
+        cbf_pos = cbf[cbf > 0]
+        cbv_pos = cbv[cbv > 0]
+        cbf_thresh = cbf > np.percentile(cbf_pos, p) if cbf_pos.size > 0 else np.zeros_like(cbf, dtype=bool)
+        cbv_thresh = cbv > np.percentile(cbv_pos, p) if cbv_pos.size > 0 else np.zeros_like(cbv, dtype=bool)
+        return (cbf_thresh | cbv_thresh).astype(np.float32)
+
+    @staticmethod
+    def _pad_spatial(arr, target_hw):
+        """Zero-pad H and W (first two axes) to target_hw. Supports (H,W,D) and (H,W,D,T)."""
+        target_h, target_w = target_hw
+        H, W = arr.shape[:2]
+        pad_h = max(0, target_h - H)
+        pad_w = max(0, target_w - W)
+        pads = [(pad_h // 2, pad_h - pad_h // 2), (pad_w // 2, pad_w - pad_w // 2)]
+        pads += [(0, 0)] * (arr.ndim - 2)
+        return np.pad(arr, pads)
+
+    _MIN_GAP = 3  # minimum frames between last context frame and target frame
+    _MAX_GAP = 8  # maximum gap (clipped to sequence length)
+
+    def _sample_frame_indices_npz(self, t_full):
+        """Sample self.frames random context positions and a target at least _MIN_GAP later."""
+        max_ctx = t_full - self._MIN_GAP - 1
+        max_ctx = max(max_ctx, self.frames)
+        pool = min(max_ctx, t_full - self._MIN_GAP)
+        ctx_indices = sorted(np.random.choice(pool, size=self.frames, replace=False).tolist())
+        last_ctx = ctx_indices[-1]
+        min_tgt = last_ctx + self._MIN_GAP
+        target_frame_idx = min_tgt
+        return ctx_indices, target_frame_idx
+
+    def _create_missing_mask_npz(self):
+        """Binary mask of shape (self.frames,) indicating which context slots are visible."""
+        last_context = self.frames - self.distance
+        missing_mask = np.zeros(self.frames, dtype=np.float32)
+        n_keep = min(max(2, self.num_to_keep), last_context)
+        keep_idx = np.random.choice(last_context, size=n_keep, replace=False)
+        missing_mask[keep_idx] = 1
+        if self.include_first:
+            missing_mask[0] = 1
+        if self.include_last:
+            missing_mask[last_context] = 1
+        return missing_mask
+
+    def precompute_randomness_npz(self):
+        """Precompute random frame indices and missing mask for deterministic val/test."""
+        print("Precomputing random indices for deterministic validation and test (npz mode)")
+        self.indices_random = []
+        for patient_path in self.data:
+            npz = np.load(patient_path)
+            t_orig = npz['ctp'].shape[-1]
+            t_full = (t_orig + 1) // 2  # matches [::2] subsampling in __getitem__
+            ctx_indices, target_frame_idx = self._sample_frame_indices_npz(t_full)
+            missing_mask = self._create_missing_mask_npz()
+            self.indices_random.append({
+                'ctx_indices': ctx_indices,
+                'target_frame_idx': target_frame_idx,
+                'missing_mask': missing_mask,
+            })
+
+    def _getitem_npz(self, index):
+        npz = np.load(self.data[index])
+        ctp = npz['ctp'].astype(np.float32)[..., ::2]  # (H, W, D, T), cap T
+        lvo_mask = npz['lvo_mask'].astype(np.float32)
+        lesion_mask = npz['lesion_mask'].astype(np.float32)
+        # Perfusion mask computed on the fly so the threshold can be tuned without re-running preprocessing.
+        # TODO: review comment
+        if 'cbf' in npz and 'cbv' in npz:
+            perfusion_mask = self._make_perfusion_mask(npz['cbf'].astype(np.float32), npz['cbv'].astype(np.float32))
+        else:
+            perfusion_mask = np.ones(ctp.shape[:3], dtype=np.float32)
+
+        target_hw = self.in_shape[2:4]  # (H, W)
+        ctp = self._pad_spatial(ctp, target_hw)
+        lvo_mask = self._pad_spatial(lvo_mask, target_hw)
+        lesion_mask = self._pad_spatial(lesion_mask, target_hw)
+        perfusion_mask = self._pad_spatial(perfusion_mask, target_hw)
+
+        data = np.transpose(ctp, (3, 2, 1, 0))  # (T, D, W, H)
+        sampled_data = data[:, np.newaxis]  # (T, 1, D, W, H)
+        t_full = sampled_data.shape[0]
+
+        # ctp is reversed (H,W,D,T)->(T,D,W,H) above, so the masks (still H,W,D) must
+        # reverse the same way (2,1,0)->(D,W,H) to stay aligned — otherwise H/W end up
+        # swapped, invisible on square (H==W) volumes (same bug class as ACDC's seg fix).
+        # TODO: review comment
+        lvo_mask = np.transpose(lvo_mask, (2, 1, 0))
+        lesion_mask = np.transpose(lesion_mask, (2, 1, 0))
+        perfusion_mask = np.transpose(perfusion_mask, (2, 1, 0))
+
+        if self.precompute_random:
+            rand_info = self.indices_random[index]
+            ctx_indices = rand_info['ctx_indices']
+            target_frame_idx = rand_info['target_frame_idx']
+            missing_mask = rand_info['missing_mask']
+        else:
+            ctx_indices, target_frame_idx = self._sample_frame_indices_npz(t_full)
+            missing_mask = self._create_missing_mask_npz()
+
+        context = sampled_data[ctx_indices]        # (T, 1, D, W, H)
+        target = sampled_data[[target_frame_idx]]  # (1, 1, D, W, H)
+
+        context_time = np.array(ctx_indices, dtype=np.float32) / max(t_full - 1, 1)
+        target_time = np.array([target_frame_idx], dtype=np.float32) / max(t_full - 1, 1)
+
+        context = context * missing_mask[..., None, None, None, None]
+        noise = np.random.randn(*context.shape) * self.noise
+        context = np.float32(context + noise)
+
+        # target_seg/context_seg/target_seg_* match target_img's own shape (1,1,D,W,H)
+        # exactly, same convention this file's old placeholder used (np.ones(shape=
+        # target.shape)) and the same one oasis_loader.py uses — not a "missing
+        # channel dim" convention, so no unsqueeze is needed downstream.
+        # TODO: review comment
+        target_seg = perfusion_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
+        target_seg_lesion = lesion_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
+        target_seg_lvo = lvo_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
+
+        return {
+            'target_img': target,
+            'context': context,
+            'target_seg': target_seg,
+            'context_seg': target_seg,
+            # Per-structure masks so eval.py can optionally report per-structure seg-masked metrics.
+            # TODO: review comment
+            'target_seg_lesion': target_seg_lesion,
+            'target_seg_lvo': target_seg_lvo,
+            'target_time': target_time,
+            'context_time': context_time,
+        }
+
     def __len__(self):
         return len(self.data)
 
@@ -186,6 +374,8 @@ class ISLESDataset(Dataset):
         return missing_mask, target_idx
 
     def __getitem__(self, index):
+        if self._npz_mode:
+            return self._getitem_npz(index)
         data = np.transpose(self.data[index], (3, 2, 1, 0))
         sampled_data = data[:, np.newaxis]
         sampled_data = filter_and_normalize(sampled_data)# data[::5, np.newaxis] was the previous one!
@@ -286,6 +476,10 @@ class ISLESDataset(Dataset):
         Used to build the model with the correct input shape
         :return:
         '''
+        if self._npz_mode:
+            sample = self[0]
+            _, C, D, H, W = sample['context'].shape
+            return (self.frames, C, D, H, W)
         # we can make this more elegant, but this is fine I guess? maybe just move this to the train
         # T_all, C, D, H, W = self.in_shape
         data_sample = np.transpose(self.data[0], (3, 2, 1, 0))
