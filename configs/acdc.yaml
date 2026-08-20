@@ -11,17 +11,18 @@ batch_size: 4
 num_workers: 4
 num_to_keep_context: 3   # number of context frames fed to the model (T-1 at most), if more than T, then use full context
 val_split: 0              # which fold to hold out as validation (0-4)
+augmentation: true
 
 # model
 base_channels: 32
 fm_model_unet_expands: [1, 1, 2, 4]
 number_evals: 10
-training_noise: 0.00
+training_noise: 0.01
 
 # optimization
 lr: 1.0e-4
 weight_decay: 0.01
-num_epochs: 500
+num_epochs: 1000
 log_interval: 10
 
 # misc
