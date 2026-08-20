@@ -23,7 +23,7 @@ framework for longitudinal medical imaging. The repository also hosts LAUGEN, a 
 
 ## Status
 
-Actively maintained. Recently added: additional dataloaders.
+Actively maintained. Recently added: additional dataloaders, and a nicer eval.py.
 Coming soon: LAUGEN longitudinal augmentations.
 ## Installation
 Clone this repository and install the required packages:
