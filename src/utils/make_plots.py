@@ -201,6 +201,68 @@ def semisynth_deform_gif(sample, results_dir, name, structure='all', num_frames=
     print(f"Saved semisynth-deform GIF: {out_path}")
 
 
+def sliding_context_prediction_gif(model, patient_data, device, in_shape, context_len,
+                                    results_dir, name, fps=4):
+    """Generate a side-by-side (ground truth | prediction) GIF across a full real sequence.
+
+    For every frame after the first, the model predicts it from a fixed-size window of the
+    *real* preceding frames (left-padded/time-masked the same way ACDCDataset pads short
+    context), never from its own previous predictions — so there's no autoregressive drift,
+    while still looking like a full rollout across the sequence.
+
+    patient_data: (T, C, D, H, W) array/tensor for one patient — e.g. dataset.data[idx].
+    in_shape:     model_args.in_shape, as passed to _forward_and_reshape elsewhere.
+    context_len:  number of context frames the model was trained with (num_to_keep_context).
+    """
+    from utils.validation_utils import _forward_and_reshape
+
+    if torch.is_tensor(patient_data):
+        patient_data = patient_data.detach().cpu().numpy()
+    patient_data = np.asarray(patient_data, dtype=np.float32)
+    n_frames = patient_data.shape[0]
+    times = np.linspace(0, 1, n_frames, dtype=np.float32)
+
+    gt_frames, pred_frames = [], []
+    model.eval()
+    with torch.no_grad():
+        for t in range(1, n_frames):
+            start = max(0, t - context_len)
+            ctx_imgs = patient_data[start:t]
+            ctx_times = times[start:t]
+            pad_len = context_len - ctx_imgs.shape[0]
+            if pad_len > 0:
+                pad_imgs = np.zeros((pad_len, *ctx_imgs.shape[1:]), dtype=np.float32)
+                pad_times = -np.ones(pad_len, dtype=np.float32)
+                ctx_imgs = np.concatenate([pad_imgs, ctx_imgs], axis=0)
+                ctx_times = np.concatenate([pad_times, ctx_times], axis=0)
+
+            batch_x = torch.from_numpy(ctx_imgs).unsqueeze(0).to(device)
+            batch_y = torch.from_numpy(patient_data[t][None, None]).to(device)
+            time_points = torch.from_numpy(
+                np.concatenate([ctx_times, times[[t]]])[None]
+            ).to(device)
+
+            pred, gt = _forward_and_reshape(model, batch_x, batch_y, time_points, in_shape=in_shape)
+            pred_frames.append(pred[0])
+            gt_frames.append(gt[0])
+
+    def _mid_slice(vol):
+        arr = vol.detach().cpu().float().numpy().squeeze()
+        while arr.ndim > 2:
+            arr = arr[arr.shape[0] // 2]
+        lo, hi = arr.min(), arr.max()
+        return (arr - lo) / (hi - lo + 1e-8)
+
+    frames = []
+    for gt, pred in zip(gt_frames, pred_frames):
+        composite = np.concatenate([_mid_slice(gt), _mid_slice(pred)], axis=1)
+        frames.append((composite * 255).astype(np.uint8))
+
+    out_path = os.path.join(results_dir, f"{name}_sliding_prediction.gif")
+    imageio.mimsave(out_path, frames, fps=fps, loop=0)
+    print(f"Saved sliding-context prediction GIF (GT | prediction): {out_path}")
+
+
 if __name__ == '__main__':
     import argparse
     import sys
@@ -226,6 +288,12 @@ if __name__ == '__main__':
                              "every nonzero label into one structure.")
     parser.add_argument('--deform_frames', type=int, default=8)
     parser.add_argument('--deform_seed', type=int, default=None)
+    parser.add_argument('--predict_demo', action='store_true',
+                        help='Also generate a sliding-real-context prediction GIF '
+                             '(ground truth | prediction) from a checkpoint. Requires --checkpoint.')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='.pt checkpoint to load for --predict_demo.')
+    parser.add_argument('--device', type=str, default='cuda', choices=['cpu', 'cuda'])
     args = parser.parse_args()
 
     data_dir = os.getenv("DATA_DIR", "./data")
@@ -257,3 +325,27 @@ if __name__ == '__main__':
         semisynth_deform_gif(sample, results_dir, name=args.dataset,
                              structure=args.deform_structure, num_frames=args.deform_frames,
                              fps=args.fps, seed=args.deform_seed)
+
+    if args.predict_demo:
+        if not args.checkpoint:
+            raise ValueError("--predict_demo requires --checkpoint")
+        import argparse as _argparse
+        import torch as _torch
+        from train import build_model
+
+        device = _torch.device(args.device if _torch.cuda.is_available() or args.device == 'cpu' else 'cpu')
+        ckpt = _torch.load(args.checkpoint, map_location='cpu', weights_only=False)
+        model_args = _argparse.Namespace(**ckpt['args'])
+        model_args.device = str(device)
+        model = build_model(model_args, device)
+        model.load_state_dict(ckpt['model_state_dict'])
+        model.eval()
+
+        patient_data = dataset.data[idx]
+        # The model's input width is fixed at training time to (frames_per_patient - 1) —
+        # ACDCDataset always pads/masks context to that full length regardless of
+        # num_to_keep_context (only the *contents* are masked, not the array length) — so
+        # the sliding window here must match that, not dataset.num_to_keep.
+        context_len = patient_data.shape[0] - 1
+        sliding_context_prediction_gif(model, patient_data, device, model_args.in_shape,
+                                       context_len, results_dir, name=args.dataset, fps=args.fps)
