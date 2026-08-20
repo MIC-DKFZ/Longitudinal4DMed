@@ -15,21 +15,13 @@ _SPLIT_MAP = {'trn': 'TRAIN', 'val': 'VAL', 'tst': 'TEST'}
 
 class AimiDataset(Dataset):
     """EchoNet-Dynamic-based echocardiography dataset.
-
-    Each video is inherently 2D+time (H, W, T) — unlike this repo's other
-    datasets there is no meaningful depth axis, so volumes here use D=1 rather
-    than faking a 3D shape via depth-repetition; the shared UNet never
-    pools/strides its depth axis (stride=(1,2,2) for 3D, Upsample keeps D
-    fixed), so D=1 works with no architecture changes.
-    # TODO: review comment
+    
+    NOTE: this dataset is 2D, but a lot of data. 
+    Not really tested, but may be useful to some. 
 
     VolumeTracings.csv gives an expert LV boundary trace at exactly two frames
-    per video (ED and ES). Frame sampling is built around those two frames
-    specifically — the earlier one is always the last context frame, the later
-    one is always the target — so target_seg and context_seg[-1] are real
-    rasterized LV masks on every sample, not almost-always zero the way a
-    generic uniform frame subsample would make them.
-    # TODO: review comment
+    per video (ED and ES). Frame sampling is built around those two frames 
+    specifically. Similar usage as acdc. 
     """
 
     def __init__(self, data_dir=None, train_test_val='trn', debug: bool = False, resize=None, **kwargs):
@@ -48,12 +40,10 @@ class AimiDataset(Dataset):
         file_list = file_list[file_list['Split'] == split]
 
         tracings = pd.read_csv(self.data_path / 'VolumeTracings.csv')
-        # VolumeTracings.csv's FileName includes '.avi'; FileList.csv's doesn't — strip it
-        # here so both dicts key off the same (suffix-less) video identifier.
-        # TODO: review comment
+        # VolumeTracings.csv's FileName includes '.avi'. 
+        #FileList.csv's doesn't  strip it here so both dicts key off the same (suffix-less) video identifier.
         tracings = tracings.assign(FileName=tracings['FileName'].str.replace('.avi', '', regex=False))
         # Two traced frames per video (ED/ES): {FileName: {frame: (N,4) x1,y1,x2,y2 chords}}.
-        # TODO: review comment
         self.traces = {
             fname: {
                 frame: grp[['X1', 'Y1', 'X2', 'Y2']].to_numpy(dtype=np.float32)
@@ -80,7 +70,6 @@ class AimiDataset(Dataset):
         """points: (N, 4) array of (x1,y1,x2,y2) chords, base-to-apex. Standard
         EchoNet-Dynamic rasterization: walk down one side of the chords then
         back up the other to form a closed LV boundary polygon.
-        # TODO: review comment
         """
         x1, y1, x2, y2 = points[:, 0], points[:, 1], points[:, 2], points[:, 3]
         xs = np.concatenate([x1, x2[::-1]])
@@ -99,10 +88,7 @@ class AimiDataset(Dataset):
         if not cap.isOpened():
             raise IOError(f"Could not open {fname}.avi")
 
-        # Context: num_context frames sampled uniformly between frame 0 and
-        # frame_ctx inclusive, so the LAST context frame is always frame_ctx
-        # (the earlier trace) and lines up exactly with its real mask below.
-        # TODO: review comment
+        # Context: num_context frames sampled uniformly between frame 0 and ctx, so last frame is frame_ctx.
         ctx_indices = np.linspace(0, frame_ctx, self.num_context).round().astype(int)
         needed = sorted(set(ctx_indices.tolist() + [frame_tgt]))
 

@@ -106,15 +106,10 @@ def _build_dataset(name, data_dir, debug=True, val_split=0):
                             num_to_keep_context=5, debug=debug, val_split=val_split, dense=True)
     if name == 'lumiere':
         from data_loaders.lumiere_loader import LumiereDataset
-        # NOTE: LumiereDataset's split kwarg is train_test_val, not split — matches the same
-        # fix applied to data_utils.build_dataloader this session (was silently always 'trn').
-        # TODO: review comment
         return LumiereDataset(data_dir=data_dir, train_test_val='val',
                               num_to_keep_context=5, debug=debug, val_split=val_split)
     if name == 'oasis':
         from data_loaders.oasis_loader import OASISDataset
-        # NOTE: same split-kwarg fix as lumiere above.
-        # TODO: review comment
         return OASISDataset(data_dir=data_dir, train_test_val='val',
                             num_to_keep_context=5, debug=debug, val_split=val_split)
     if name == 'aimi':
@@ -126,7 +121,6 @@ def _build_dataset(name, data_dir, debug=True, val_split=0):
 def _extract_3d(x):
     """Squeeze a target_img/target_seg tensor down to a plain (D, H, W) volume,
     regardless of how many leading (T, C, ...) dims a given dataset's convention adds.
-    # TODO: review comment
     """
     if torch.is_tensor(x):
         x = x.detach().cpu().numpy()
@@ -139,12 +133,6 @@ def _extract_3d(x):
 def semisynth_deform_gif(sample, results_dir, name, structure='all', num_frames=8, fps=4, seed=None):
     """Generate a synthetic-longitudinal-deformation GIF via SemiSynthLongi.deform_structure,
     seeded from one real dataset sample's target_img + target_seg.
-
-    Dataset-agnostic: deform_structure only ever needs an (image, label) pair, so this works on
-    any dataset with a real segmentation target (ACDC's multi-structure cardiac segmentation,
-    OASIS's CSF/hippocampus masks, aimi's LV mask, ...), not just BraTS — no real BraTS data
-    needed to exercise this augmentation.
-    # TODO: review comment
 
     structure: 'all' merges every nonzero label (deform_structure's own convention, label>=1);
                or a specific label value (e.g. '3' for ACDC's LV) to deform just that structure.
@@ -162,20 +150,10 @@ def semisynth_deform_gif(sample, results_dir, name, structure='all', num_frames=
     if structure != 'all':
         label = (label == float(structure)).astype(np.float32)
     else:
-        # Some datasets' seg masks aren't strictly binary (e.g. Lumiere's linear-interpolation
-        # resize can leave fractional/>1 values) — deform_structure's internal Gaussian-weighting
-        # step blurs the mask and thresholds its gradient at a fixed 0.1, which a smeared-out
-        # fractional mask can fail to cross anywhere, crashing deep inside it. Binarize first so
-        # the gradient is always as sharp as the mask's true boundary, regardless of a given
-        # dataset's own resize pipeline.
-        # TODO: review comment
+        # binarize instead. 
         label = (label >= 0.5).astype(np.float32)
 
-    # deform_structure needs at least one voxel with a real label gradient to seed its
-    # deformation field — an all-zero mask (e.g. a real clinical sample with no visible
-    # structure at that timepoint) would otherwise crash deep inside it with a cryptic
-    # numpy error. Fail with a clear, actionable message instead.
-    # TODO: review comment
+    # deform_structure needs at least one voxel with a real label gradient.
     if not (label > 0).any():
         raise ValueError(
             f"target_seg for this sample is all-zero for structure={structure!r} — "
@@ -304,10 +282,7 @@ if __name__ == '__main__':
     dataset = _build_dataset(args.dataset, data_dir, debug=True, val_split=args.val_split)
 
     if args.longest:
-        # dataset.data is a list of per-patient records for every loader in this repo;
-        # "longest" = most real (pre-padding) timepoints, e.g. LumiereDataset.data[i] is a
-        # dict of visits, OASISDataset.data[i]['dates'] is a list of visit dates, etc.
-        # TODO: review comment
+        # dataset.data is a list of per-patient records for every loader in this repo. 
         def _seq_len(rec):
             if isinstance(rec, dict) and 'dates' in rec:
                 return len(rec['dates'])

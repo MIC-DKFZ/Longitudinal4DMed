@@ -1354,7 +1354,6 @@ class EncoderUNetModel(nn.Module):
             return self.out(h)
 
 
-# TODO: instead of class conditioning, do a image conditioning
 class ConditionedUNet(CondUNetModel):
     def __init__(
             self,

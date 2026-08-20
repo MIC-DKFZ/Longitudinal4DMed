@@ -416,16 +416,3 @@ if __name__ == "__main__":
     # data_set.generate_save_data()
     # data_set.augment_data()
 
-    '''
-            elif args.dataset == 'brats':
-            from .brats_semi_loader import SemiSynthLongi #TODO: rename to something more general if we use it for non-Brats data
-            # todo: also import it
-            print("Currently not yet supported. ")
-            data_dir = os.getenv("DATA_DIR", "./data/")
-            dataset = SemiSynthLongi(
-                data_dir=data_dir,
-                split=train_test_val,
-                num_to_keep_context=5,
-                **vars(args)
-            )
-    '''

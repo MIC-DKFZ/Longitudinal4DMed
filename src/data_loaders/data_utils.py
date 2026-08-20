@@ -30,6 +30,12 @@ class BGTransformWrapper(Dataset):
     def __getitem__(self, idx: int) -> dict:
         s = self.dataset[idx]
 
+        """
+        target seg and context seg must go through saqme spatial transform as images. 
+        therefore we pass them through the seg= arg. 
+        Note that the seg shape may not be uniform across datasets. 
+        """
+
         def _to_numpy(x):
             return x.numpy() if isinstance(x, torch.Tensor) else np.asarray(x)
 
@@ -38,16 +44,7 @@ class BGTransformWrapper(Dataset):
 
         combined = np.concatenate([t, c], axis=0).astype(np.float32)  # (T+1, C, D, H, W)
         T1, C, D, H, W = combined.shape
-
-        # target_seg/context_seg must go through the SAME spatial transform as the
-        # images (rotation/elastic-deform), via batchgenerators' separate seg=
-        # argument, so they get nearest-neighbor interpolation (order_seg=0) instead
-        # of the intensity transforms (noise/gamma/brightness) that would corrupt
-        # binary mask values. Seg shape isn't uniform across datasets (ACDC's is a
-        # bare (D,H,W) volume; others match target_img's full (T',C,D,H,W) shape) —
-        # flatten each into a generic (K, D, H, W) channel stack keyed only by the
-        # spatial dims shared with combined, then reshape back after the transform.
-        # TODO: review comment
+        
         t_seg_shape, c_seg_shape = t_seg.shape, c_seg.shape
         t_seg_flat = t_seg.astype(np.float32).reshape(-1, D, H, W)
         c_seg_flat = c_seg.astype(np.float32).reshape(-1, D, H, W)

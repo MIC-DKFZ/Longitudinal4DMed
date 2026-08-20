@@ -53,14 +53,13 @@ if load_torcheval:
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
-# A domain-specific, embedding-based perceptual metric (e.g. distance in a
-# pretrained medical-image encoder's feature space) is a natural next metric to
-# add here, in the same slot as 'perc' below — omitted from this public release.
-# TODO: review comment
 
 def _laplacian_edge_nrmse(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     """NRMSE on 3-D Laplacian-filtered volumes: quantifies edge/structure
-    sharpness preservation, independent of the plain intensity NRMSE."""
+    sharpness preservation, independent of the plain intensity NRMSE.
+    Also appears to help in training for structure. 
+    TODO: add this optionally as a loss
+    """
     k = pred.new_zeros(1, 1, 3, 3, 3)
     k[0, 0, 1, 1, 1] = -6
     for idx in [(0, 1, 1), (2, 1, 1), (1, 0, 1), (1, 2, 1), (1, 1, 0), (1, 1, 2)]:
@@ -94,9 +93,11 @@ def _correlation_distance(pred, gt, lci, eps=_CORR_EPS, n_subsample=_CORR_SUBSAM
     """Offset-only Spearman distance: (1 - Spearman(Δpred, Δgt)) / 2, computed over
     voxels where |Δgt| > eps (Δ = value - lci baseline). 0 = perfect, 0.5 = no
     correlation (also what a do-nothing pred=lci baseline scores), 1 = anti-correlated.
-    Standard-library reimplementation (scipy.stats.spearmanr) of the same recipe used
-    internally — not a proprietary metric.
-    # TODO: review comment
+    Note that we could also use this in principle without the lci delta. 
+    Also, this loss is quite compute intense, so it is adviced to only use it sparingly or during inference. 
+
+    # TODO: ad a warning that if this metric is used it may be compute intense. 
+    # NOTE: Compute intense, but neat as additional metric. 
     """
     from scipy.stats import spearmanr
     d_gt = (gt - lci).flatten().cpu().numpy()
@@ -120,7 +121,6 @@ def _auroc_distance(pred, gt, lci, k=_AUROC_K):
     0 = perfect, 0.5 = no signal (also the do-nothing pred=lci baseline score),
     1 = predicts the wrong direction. Standard-library reimplementation
     (sklearn.metrics.roc_auc_score) of the same recipe used internally.
-    # TODO: review comment
     """
     from sklearn.metrics import roc_auc_score
     d_gt = (gt - lci).flatten().cpu().numpy()
@@ -150,10 +150,7 @@ def _is_metric_col(col: str) -> bool:
         return True
     if col.startswith('seg_'):
         rest = col[len('seg_'):]
-        # Check longest metric names first: 'edge_nrmse' itself ends with 'nrmse',
-        # so checking 'nrmse' first would misparse 'seg_csf_edge_nrmse' as
-        # structure 'csf_edge' + metric 'nrmse' instead of 'csf' + 'edge_nrmse'.
-        # TODO: review comment
+        # Check longest metric names first -> so no collisions. 
         return rest in _BASE_METRICS or any(
             rest.endswith(f'_{m}') for m in sorted(_BASE_METRICS, key=len, reverse=True)
         )
@@ -300,8 +297,6 @@ _TABLE_COLS = [
 ]
 _HIGHER_IS_BETTER = {'SSIM', 'PSNR'}
 # Corr/AUROC here are distances (0=perfect, 0.5=do-nothing, 1=worst) — lower is better,
-# same convention as the internal reference this was reimplemented from.
-# TODO: review comment
 _LOWER_IS_BETTER = {'NRMSE', 'Edge-NRMSE', 'Perc', 'Corr', 'AUROC'}
 
 

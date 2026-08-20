@@ -162,11 +162,6 @@ class ACDCDataset(Dataset):
             x = self.data[idx, target_idx]
 
             # add the segmentations as well if we need them downstream or for evals
-            # self.data's own load-time transpose (0,1,4,3,2) fully reverses the
-            # spatial axes (H<->W included), so seg must reverse the same way to stay
-            # aligned with the image — (2,0,1) only moves D to the front and leaves
-            # H/W swapped. Invisible on square (H==W) volumes like ACDC's.
-            # TODO: review comment
             seg_a = np.transpose(seg_a, (2, 1, 0))
             seg_b = np.transpose(seg_b, (2, 1, 0))
             time_vector = np.linspace(0, 1, x_prev_final.shape[0] + 1, dtype=np.float32)

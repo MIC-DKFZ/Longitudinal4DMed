@@ -117,12 +117,7 @@ def process_batch_non_zero(batch_x, batch_y=None, time_points=None, max_images=8
 
 
 def _normalize_seg_for_loss(seg, loss_shape):
-    """Reshape a target_seg tensor (whatever leading-dim convention a given dataset uses —
-    bare (B,D,H,W) for ACDC, (B,1,1,D,H,W) for OASIS/ISLES/aimi, ...) into (B,1,*spatial) so
-    it broadcasts against a per-voxel loss tensor of loss_shape (B,C',*spatial). Returns None
-    if the element count doesn't divide evenly (shape genuinely inconsistent) so the caller
-    can skip this sample's ROI term rather than crash.
-    # TODO: review comment
+    """Reshape a target_seg tensor so that the spatial shape fits.
     """
     seg = seg.float()
     B = loss_shape[0]
@@ -137,20 +132,12 @@ def _normalize_seg_for_loss(seg, loss_shape):
 
 def compute_roi_term(loss, target_seg):
     """Mean of per-voxel `loss` restricted to voxels where target_seg > 0.5. Returns 0 (not
-    NaN) if target_seg is None, all-zero, or its shape can't be reconciled with loss's — a
-    missing/degenerate segmentation for one sample is a harmless no-op, not a crash (matches
-    the internal reference's clamp(min=1) safety).
+    NaN) if target_seg is None, all-zero, for safety. 
 
     Meant to be added ON TOP OF (not replacing) the base reduced loss, scaled by a
-    lambda_roi_seg hyperparameter at the call site:
-        per_voxel_loss = F.mse_loss(vt, ut, reduction='none')
-        loss = per_voxel_loss.mean()
-        if lambda_roi_seg > 0:
-            loss = loss + lambda_roi_seg * compute_roi_term(per_voxel_loss, batch_y_seg)
-    This upweights the segmented region without zeroing out the rest of the image — see
-    HANDOVER_NOTES.md's segmentation-based-losses handoff for the design rationale.
-    # TODO: review comment
+    lambda_roi_seg hyperparameter at the call site. 
 
+    NOTE: turns out this can be really useful for stabilizing training for cronos for different settings. 
     loss: per-voxel loss tensor, NOT yet reduced, shape (B, C', *spatial).
     """
     if target_seg is None:

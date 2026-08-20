@@ -42,17 +42,7 @@ class ISLESDataset(Dataset):
             print("Using the paper pre-processing, see dataloader for details")
             print("Only works for the pre-processing")
             print(64*'#')
-
-        # Real, per-structure segmentation target: a CBF/CBV perfusion-abnormality ROI
-        # mask (percentile-threshold over the ISLES-2024 challenge's own perfusion maps
-        # — no extra tooling needed, unlike OASIS's FSL FAST/FIRST dependency), plus the
-        # challenge's own expert lesion_mask/lvo_mask annotations, exposed as
-        # target_seg_lesion/target_seg_lvo for eval.py. Requires data prepared via the
-        # per-patient isles3/npy_data/<patient>.npz layout (see isles_prepare.py) — the
-        # old single flat trn_m_isles.npy/tst_m_isles.npy layout has no per-patient
-        # segmentation at all, so 'real' mode automatically falls back to the
-        # all-ones placeholder when that newer per-patient data isn't found.
-        # TODO: review comment
+        # The segmentation target is the CBF / CBV perfusion ROI.   
         self.seg_target_mode = kwargs.get('isles_seg_mode', 'real')
         assert self.seg_target_mode in ('real', 'placeholder'), \
             f"isles_seg_mode must be 'real' or 'placeholder', got {self.seg_target_mode!r}"
@@ -266,8 +256,7 @@ class ISLESDataset(Dataset):
         ctp = npz['ctp'].astype(np.float32)[..., ::2]  # (H, W, D, T), cap T
         lvo_mask = npz['lvo_mask'].astype(np.float32)
         lesion_mask = npz['lesion_mask'].astype(np.float32)
-        # Perfusion mask computed on the fly so the threshold can be tuned without re-running preprocessing.
-        # TODO: review comment
+        # Perfusion mask computed on the fly so the threshold
         if 'cbf' in npz and 'cbv' in npz:
             perfusion_mask = self._make_perfusion_mask(npz['cbf'].astype(np.float32), npz['cbv'].astype(np.float32))
         else:
@@ -283,10 +272,6 @@ class ISLESDataset(Dataset):
         sampled_data = data[:, np.newaxis]  # (T, 1, D, W, H)
         t_full = sampled_data.shape[0]
 
-        # ctp is reversed (H,W,D,T)->(T,D,W,H) above, so the masks (still H,W,D) must
-        # reverse the same way (2,1,0)->(D,W,H) to stay aligned — otherwise H/W end up
-        # swapped, invisible on square (H==W) volumes (same bug class as ACDC's seg fix).
-        # TODO: review comment
         lvo_mask = np.transpose(lvo_mask, (2, 1, 0))
         lesion_mask = np.transpose(lesion_mask, (2, 1, 0))
         perfusion_mask = np.transpose(perfusion_mask, (2, 1, 0))
@@ -310,11 +295,7 @@ class ISLESDataset(Dataset):
         noise = np.random.randn(*context.shape) * self.noise
         context = np.float32(context + noise)
 
-        # target_seg/context_seg/target_seg_* match target_img's own shape (1,1,D,W,H)
-        # exactly, same convention this file's old placeholder used (np.ones(shape=
-        # target.shape)) and the same one oasis_loader.py uses — not a "missing
-        # channel dim" convention, so no unsqueeze is needed downstream.
-        # TODO: review comment
+        # target_seg/context_seg/target_seg_* match target_img's own shape (1,1,D,W,H) exactly
         target_seg = perfusion_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
         target_seg_lesion = lesion_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
         target_seg_lvo = lvo_mask[np.newaxis, np.newaxis, ...].astype(np.float32)
@@ -324,8 +305,6 @@ class ISLESDataset(Dataset):
             'context': context,
             'target_seg': target_seg,
             'context_seg': target_seg,
-            # Per-structure masks so eval.py can optionally report per-structure seg-masked metrics.
-            # TODO: review comment
             'target_seg_lesion': target_seg_lesion,
             'target_seg_lvo': target_seg_lvo,
             'target_time': target_time,
