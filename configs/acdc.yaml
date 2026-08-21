@@ -12,6 +12,7 @@ num_workers: 4
 num_to_keep_context: 3   # number of context frames fed to the model (T-1 at most), if more than T, then use full context
 val_split: 0              # which fold to hold out as validation (0-4)
 augmentation: true
+# lambda_roi_seg: 0.0   # weight for the ROI-weighted loss term on target_seg (0 = disabled)
 
 # model
 base_channels: 32

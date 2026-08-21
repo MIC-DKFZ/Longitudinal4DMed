@@ -32,8 +32,8 @@ except:
 try:
     from torcheval.metrics import FrechetInceptionDistance
     load_torcheval = True
-    fid_metric = FrechetInceptionDistance().to('cuda')
-    fid_metric_last_image = FrechetInceptionDistance().to('cuda')
+    fid_metric = FrechetInceptionDistance()
+    fid_metric_last_image = FrechetInceptionDistance()
 except:
     print('could not load torcheval')
     load_torcheval = False
@@ -240,6 +240,7 @@ def update_fid_metric(val_y, val_x, fid_metric):
         B, C, D, H, W = norm_output.shape
     elif norm_output.dim() ==4:
         B,D,H,W = norm_output.shape
+        C = 1
     elif norm_output.dim() ==6:
         B,T,C,D,H,W = norm_output.shape
     else:
@@ -295,6 +296,9 @@ def val_step(valid_loader, train_model, device, metric_functions = metric_functi
             metric_functions[name] = metric.to(device)
         except:
             pass
+    if load_torcheval:
+        fid_metric.to(device)
+        fid_metric_last_image.to(device)
 
     with torch.no_grad():
         total_metrics = {name: 0.0 for name, _ in metric_functions.items()}
@@ -332,8 +336,8 @@ def val_step(valid_loader, train_model, device, metric_functions = metric_functi
                 batch_y_val,
                 batch_x_seg,
                 batch_y_seg,
-                temporal_masking=False,
-                use_seg=False,
+                temporal_masking=temporal_masking,
+                use_seg=use_seg,
                 device=batch_y_val.device,
             )
 

@@ -17,6 +17,8 @@ from pathlib import Path
 from utils.validation_utils import val_step, _extract_batch, _forward_and_reshape, get_last_context_image_baseline
 from methods.temporal_flow_matching_method import TemporalFlowMatching
 from methods.cronos import CRONOS
+from methods.latent_fm import LatentFMModel
+from methods.deform_flow import DeformFlowModel
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -69,6 +71,16 @@ def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
             feature_size=args.base_channels,
             **(vars(args)),
         )
+    elif model_type == 'latent_fm':
+        model = LatentFMModel(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
+    elif model_type == 'deform_flow':
+        model = DeformFlowModel(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
     else:
         print('No valid model used: Defaulting to Temporal Flow Matching model')
         model = TemporalFlowMatching(
@@ -97,6 +109,7 @@ def train_one_epoch(
         optimizer.zero_grad()
         loss = model.training_step(batch, batch_idx)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         running_loss += loss.item()
         num_batches += 1
@@ -132,6 +145,8 @@ def main() -> None:
     data_shape = train_loader.dataset._get_data_shape()
     args.in_shape = data_shape
     model = build_model(args, device)
+    if hasattr(model, 'set_writer'):
+        model.set_writer(writer)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -143,47 +158,63 @@ def main() -> None:
     print(f"Number of train batches: {len(train_loader)}")
 
     best_val = float("inf")
-    for epoch in range(1, args.num_epochs + 1):
-        avg_loss = train_one_epoch(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            device=device,
-            epoch=epoch,
-            log_interval=args.log_interval,
-        )
-        scheduler.step()
-        print(f"Epoch {epoch} completed. Average loss: {avg_loss:.4f}")
-        writer.add_scalar("Loss/train", avg_loss, epoch)
-        writer.add_scalar("Train/lr", optimizer.param_groups[0]["lr"], epoch)
+    bad_epochs = 0  # consecutive validation rounds without improvement; drives plateau_function()
+    try:
+        for epoch in range(1, args.num_epochs + 1):
+            avg_loss = train_one_epoch(
+                model=model,
+                loader=train_loader,
+                optimizer=optimizer,
+                device=device,
+                epoch=epoch,
+                log_interval=args.log_interval,
+            )
+            scheduler.step()
+            print(f"Epoch {epoch} completed. Average loss: {avg_loss:.4f}")
+            writer.add_scalar("Loss/train", avg_loss, epoch)
+            writer.add_scalar("Train/lr", optimizer.param_groups[0]["lr"], epoch)
 
-        if epoch % args.log_interval == 0:
-            val_result = val_step(validation_loader, model, min_val=best_val, **vars(args))
-            # currently, we still insert the best loss into the val step, will be deprecated
-            avg_val = val_result[1]
-            for metric_name, metric_value in val_result[0].items():
-                writer.add_scalar(f"Val/{metric_name}", metric_value, epoch)
-            _log_image_grid(writer, model, validation_loader, device, data_shape, epoch)
+            if epoch % args.log_interval == 0:
+                val_result = val_step(validation_loader, model, min_val=best_val, **vars(args))
+                # currently, we still insert the best loss into the val step, will be deprecated
+                avg_val = val_result[1]
+                for metric_name, metric_value in val_result[0].items():
+                    writer.add_scalar(f"Val/{metric_name}", metric_value, epoch)
+                _log_image_grid(writer, model, validation_loader, device, data_shape, epoch)
 
-            # "best" checkpoint
-            if avg_val < best_val and not args.debug:
-                best_val = avg_val
-                current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                ckpt_path = Path(args.save_dir) / f"{current_time}_tfm_best.pt"
-                # ckpt_path = os.path.join(args.save_dir, f"{current_time}_tfm_best.pt")
-                torch.save(
-                    {
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "epoch": epoch,
-                        "avg_loss": avg_loss,
-                        "args": vars(args),
-                    },
-                    ckpt_path,
-                )
-                print(f"Saved new best checkpoint to {ckpt_path}")
+                if avg_val < best_val:
+                    bad_epochs = 0
+                else:
+                    bad_epochs += 1
+                    # Two-phase models (LatentFMModel, DeformFlowModel) gate the actual
+                    # switch on their own readiness thresholds (e.g. min_ae_steps) — this
+                    # is just the coarse trigger, matching SADM's own bad_epochs>=2 rule.
+                    if bad_epochs >= 2 and hasattr(model, 'plateau_function'):
+                        model.plateau_function()
 
-    writer.close()
+                # "best" checkpoint
+                if avg_val < best_val and not args.debug:
+                    best_val = avg_val
+                    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    ckpt_path = Path(args.save_dir) / f"{current_time}_tfm_best.pt"
+                    # ckpt_path = os.path.join(args.save_dir, f"{current_time}_tfm_best.pt")
+                    torch.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "epoch": epoch,
+                            "avg_loss": avg_loss,
+                            "args": vars(args),
+                        },
+                        ckpt_path,
+                    )
+                    print(f"Saved new best checkpoint to {ckpt_path}")
+    except KeyboardInterrupt:
+        print("Training interrupted by user.")
+    finally:
+        if hasattr(model, 'finalize_training'):
+            model.finalize_training()
+        writer.close()
 
 
 if __name__ == "__main__":

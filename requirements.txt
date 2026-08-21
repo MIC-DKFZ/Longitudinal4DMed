@@ -19,3 +19,6 @@ tensorboard>=2.13.0
 # monai-generative  # for perceptual (LPIPS) loss
 # torcheval         # for FID metric
 # opencv-python     # for .avi video loading (aimi_loader)
+
+# Dev — for running src/tests/
+# pytest>=7.0.0
