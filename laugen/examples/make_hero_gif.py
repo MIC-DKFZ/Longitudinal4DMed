@@ -141,6 +141,114 @@ def generate(sizes=SIZES, blur_range=BLUR_RANGE, out_path=OUT_PATH,
           f"blur_range={blur_range}")
 
 
+# Per-structure best settings from laugen.calibration.fit_params(), run via
+# calibrate_acdc.py (20 real ACDC ED->ES pairs, full PARAM_GRID, n_seeds=3,
+# wasserstein distance). One config per structure now, not a mild/moderate/
+# aggressive sweep -- see generate_calibrated().
+CALIBRATED_PARAMS = {
+    "RV":         dict(intensity=12.0, growth_max=6.0, blur_range=(1.0, 2.0), n_blobs=1),
+    "Myocardium": dict(intensity=12.0, growth_max=4.0, blur_range=(1.0, 2.0), n_blobs=1),
+    "LV":         dict(intensity=12.0, growth_max=4.0, blur_range=(1.0, 2.0), n_blobs=1),
+}
+
+
+def generate_calibrated(calibrated=CALIBRATED_PARAMS,
+                         out_path="assets/hero_acdc_calibrated.gif",
+                         img=None, seg_labels=None, pingpong=True, upscale=3):
+    """One column per structure, each using its own calibrated params instead
+    of generate()'s shared mild/moderate/aggressive grid.
+
+    `upscale`: each ~96x96 cropped cell is upsampled by this factor (LANCZOS)
+    before assembly -- the crop alone is otherwise too small/pixelated to read
+    clearly at typical README display sizes.
+    """
+    if img is None or seg_labels is None:
+        img, seg_labels = load_frame()
+    time_points = np.linspace(0, 1, N_TIMESTEPS, dtype=np.float32)
+    y0, y1, x0, x1 = _compute_crop_bounds(seg_labels, DEPTH_SLICE)
+
+    sequences = {}
+    for struct_name, label in STRUCTURES:
+        struct_seg = (seg_labels == label).astype(np.float32)
+        params = calibrated[struct_name]
+        np.random.seed(0)  # same draw across columns -> differences reflect the params, not luck
+        seq = deform_structure(img, struct_seg, time_points, intensity=params["intensity"],
+                                growth_max=params["growth_max"], target_shape=img.shape,
+                                apply_prob=1.0, n_blobs=params["n_blobs"],
+                                blur_range=params["blur_range"],
+                                fill_holes=True, fill_holes_axis=2)
+        sequences[struct_name] = seq
+
+    grid_frames = []
+    for t in range(N_TIMESTEPS):
+        cols = []
+        for struct_name, _ in STRUCTURES:
+            sl = sequences[struct_name][t, y0:y1, x0:x1, DEPTH_SLICE]
+            sl = (sl - sl.min()) / (sl.max() - sl.min() + 1e-8)
+            cell = (sl * 255).astype(np.uint8)
+            if upscale and upscale != 1:
+                from PIL import Image
+                h, w = cell.shape
+                cell = np.asarray(
+                    Image.fromarray(cell).resize((w * upscale, h * upscale), Image.LANCZOS)
+                )
+            cols.append(cell)
+        sep = np.full((cols[0].shape[0], 2), 255, dtype=np.uint8)
+        row = cols[0]
+        for c in cols[1:]:
+            row = np.concatenate([row, sep, c], axis=1)
+        grid_frames.append(row)
+
+    if pingpong:
+        grid_frames = grid_frames + grid_frames[-2:0:-1]
+
+    dirname = os.path.dirname(out_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+    imageio.mimsave(out_path, grid_frames, fps=FPS, loop=0)
+    print(f"saved {out_path}, frame shape {grid_frames[0].shape}, "
+          f"cols={[s[0] for s in STRUCTURES]}, calibrated={calibrated}")
+
+
+def generate_real_cycle(out_path="assets/real_acdc_cycle.gif",
+                         seg_labels=None, pingpong=True, upscale=3):
+    """The real (not synthetic) ACDC cardiac cycle for PATIENT_IDX -- all 12
+    acquired frames, same crop/upscale/loop treatment as generate_calibrated(),
+    so the two gifs sit side by side in the README as a real-vs-synthetic
+    comparison. The 12-frame cycle doesn't loop back to frame 0 cleanly on its
+    own (frame 11 vs frame 0 mean abs diff ~0.05, same order as one synthetic
+    deformation step) -- pingpong handles that the same way as the other gifs.
+    """
+    if seg_labels is None:
+        _, seg_labels = load_frame()
+    data = np.load(os.path.join(ACDC_DATA_DIR, "trn_dat.npy"), mmap_mode="r")
+    cycle = np.asarray(data[PATIENT_IDX]).astype(np.float32)  # (12, H, W, D)
+    y0, y1, x0, x1 = _compute_crop_bounds(seg_labels, DEPTH_SLICE)
+
+    frames = []
+    for t in range(cycle.shape[0]):
+        sl = cycle[t, y0:y1, x0:x1, DEPTH_SLICE]
+        sl = (sl - sl.min()) / (sl.max() - sl.min() + 1e-8)
+        cell = (sl * 255).astype(np.uint8)
+        if upscale and upscale != 1:
+            from PIL import Image
+            h, w = cell.shape
+            cell = np.asarray(
+                Image.fromarray(cell).resize((w * upscale, h * upscale), Image.LANCZOS)
+            )
+        frames.append(cell)
+
+    if pingpong:
+        frames = frames + frames[-2:0:-1]
+
+    dirname = os.path.dirname(out_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+    imageio.mimsave(out_path, frames, fps=FPS, loop=0)
+    print(f"saved {out_path}, frame shape {frames[0].shape}, "
+          f"patient={PATIENT_IDX}, n_real_frames={cycle.shape[0]}")
+
+
 def main():
     generate()
 
