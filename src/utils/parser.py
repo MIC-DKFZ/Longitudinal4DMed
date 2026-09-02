@@ -29,6 +29,9 @@ def get_args() -> argparse.Namespace:
                              'target_seg masks (0 = disabled, the default). Upweights the '
                              'segmented region on top of the normal full-image loss, rather '
                              'than masking the rest of the image out.')
+    parser.add_argument('--context_target_distance', type=int, default=6,
+                        help='Frame gap between context and target (acdc_loader.py); '
+                             'was tied to num_to_keep_context, now independent.')
 
     # optimization
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -51,6 +54,10 @@ def get_args() -> argparse.Namespace:
                         help="Use DummyTemporalDataset instead of a real dataset.")
     parser.add_argument("--config", type=str, default=None,
                         help="Path to a YAML config file. CLI flags override YAML values.")
+    parser.add_argument("--info", type=str, default=None,
+                        help="Short human-readable run label, saved into the checkpoint's "
+                             "args and preferred by eval.py's plot column titles over an "
+                             "auto-derived (and often too long) hparam-diff label.")
 
     # Pre-parse to find --config, then apply YAML as defaults before full parse.
     pre, _ = parser.parse_known_args()

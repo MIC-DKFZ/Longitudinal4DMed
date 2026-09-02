@@ -1,4 +1,5 @@
 import random
+import numpy as np
 import torch
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import Dataset, DataLoader
@@ -8,6 +9,7 @@ import argparse
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     # deterministic flags if you really want them (optional)

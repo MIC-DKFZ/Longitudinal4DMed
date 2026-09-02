@@ -43,7 +43,7 @@ from utils.validation_utils import (
     _ensure_min_spatial_for_lpips,
     load_torcheval,
 )
-from utils.plotting import make_prediction_grid_and_save
+from utils.plotting import make_combined_prediction_grid_and_save
 
 if load_torcheval:
     from utils.validation_utils import update_fid_metric
@@ -190,9 +190,14 @@ def _compute_sample_metrics(pred, gt, metric_functions, mask=None, lci=None):
     return out
 
 
-def _build_seg_mask(seg_raw, pred_shape, device):
+def _build_seg_mask(seg_raw, pred_shape, device, roi_dilation: int = 0, bg_reference=None, bg_threshold: float = 0.02):
     """seg_raw: whatever a batch returns under a target_seg* key (or None).
-    Returns a boolean mask of shape pred_shape, or None if unavailable/empty."""
+    Returns a boolean mask of shape pred_shape, or None if unavailable/empty.
+    roi_dilation: grow the mask by this many voxels (max-pool) before use --
+    same idea as fm_utils.fm_process_utils.compute_roi_term's roi_dilation.
+    bg_reference: if given (e.g. the GT image), voxels at or below
+    bg_threshold there are dropped after dilation -- keeps a large dilation
+    from pulling in real background/outside-head voxels, not just more tissue."""
     if seg_raw is None:
         return None
     sr = seg_raw.to(device).float()
@@ -202,7 +207,16 @@ def _build_seg_mask(seg_raw, pred_shape, device):
         sr = sr.reshape(pred_shape)
     if tuple(sr.shape) != tuple(pred_shape):
         return None
-    mask = sr > 0.5
+    mask = (sr > 0.5).float()
+    if roi_dilation > 0:
+        k = 2 * roi_dilation + 1
+        orig_shape = mask.shape
+        flat = mask.reshape(-1, 1, *orig_shape[-3:])
+        flat = F.max_pool3d(flat, kernel_size=k, stride=1, padding=roi_dilation)
+        mask = flat.reshape(orig_shape)
+    mask = mask > 0
+    if bg_reference is not None:
+        mask = mask & (bg_reference.to(device) > bg_threshold)
     return mask if bool(mask.any()) else None
 
 
@@ -404,9 +418,40 @@ def run_eval(ckpt_paths, args, device):
     assert len(datasets) == 1, f"All checkpoints must share the same --dataset, got: {datasets}"
     dataset_name = all_args[0].get('dataset', 'unknown')
 
-    labels, varying_keys = _make_labels(ckpt_paths, all_args)
+    # eval only builds ONE shared dataset (from all_args[0]) for every model --
+    # a distance mismatch would silently evaluate some checkpoints on data
+    # unlike what they were trained on.
+    distances = {a.get('context_target_distance') for a in all_args}
+    assert len(distances) == 1, f"All checkpoints must share the same context_target_distance, got: {distances}"
 
-    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / "eval" / dataset_name
+    labels, varying_keys = _make_labels(ckpt_paths, all_args)
+    # Full labels (varying-hparam dumps) are precise but too long for plot
+    # column headers. Short column label: the run's --info if it was set at
+    # train time (stripped of a leading "exp_"/trailing "_<dataset>", SADM's
+    # own convention), else bare model_type; de-duplicated on collision.
+    raw_short = []
+    for a in all_args:
+        info = a.get('info')
+        if info:
+            s = str(info)
+            if s.startswith('exp_'):
+                s = s[len('exp_'):]
+            if dataset_name and s.endswith(f'_{dataset_name}'):
+                s = s[: -(len(dataset_name) + 1)]
+            raw_short.append(s)
+        else:
+            raw_short.append(str(a.get('model_type', 'model')))
+    seen, short_by_idx = {}, []
+    for s in raw_short:
+        seen[s] = seen.get(s, 0) + 1
+        short_by_idx.append(s if seen[s] == 1 else f"{s}_{seen[s]}")
+    short_labels = dict(zip(labels, short_by_idx))
+
+    # Default out_dir: results/eval/<dataset>/<short-labels-joined>/, e.g.
+    # results/eval/acdc/diffusion_vs_fm/ -- distinct comparisons land in their
+    # own subfolder automatically, without needing --out_dir every time.
+    comparison_name = "_vs_".join(short_by_idx)
+    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / "eval" / dataset_name / comparison_name
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {out_dir}")
 
@@ -440,13 +485,20 @@ def run_eval(ckpt_paths, args, device):
         gt = batch_y.view(pred_shape)
 
         seg_masks = {}
-        generic_mask = _build_seg_mask(batch.get('target_seg'), pred_shape, device)
+        bg_ref = gt if args.exclude_background else None
+        if args.exclude_background:
+            # whole-image metrics restricted to non-background voxels, no seg
+            # mask/dilation needed -- just gt intensity itself
+            fg_mask = gt > args.bg_threshold
+            if bool(fg_mask.any()):
+                seg_masks['nonbg'] = fg_mask
+        generic_mask = _build_seg_mask(batch.get('target_seg'), pred_shape, device, args.roi_dilation, bg_ref)
         if generic_mask is not None:
             seg_masks[''] = generic_mask
         for key in batch.keys():
             if key == 'target_seg' or not key.startswith('target_seg_'):
                 continue
-            named_mask = _build_seg_mask(batch.get(key), pred_shape, device)
+            named_mask = _build_seg_mask(batch.get(key), pred_shape, device, args.roi_dilation, bg_ref)
             if named_mask is not None:
                 seg_masks[key[len('target_seg_'):]] = named_mask
 
@@ -463,6 +515,14 @@ def run_eval(ckpt_paths, args, device):
 
         gt_np = gt[0, 0].cpu().numpy()
         lci_np = lci[0, 0].cpu().numpy()
+        seg_np = seg_masks[''][0, 0].cpu().numpy() if '' in seg_masks else None
+
+        preds_np, col_metrics = {}, {}
+        if not args.no_viz:
+            col_metrics["Context"] = (
+                lci_metrics.get('seg_ssim', lci_metrics['ssim']),
+                lci_metrics.get('seg_nrmse', lci_metrics['nrmse']),
+            )
 
         for model, label in zip(models, labels):
             with torch.no_grad():
@@ -478,23 +538,22 @@ def run_eval(ckpt_paths, args, device):
                 update_fid_metric(gt, pred, fid_metrics[label])
 
             if not args.no_viz:
-                pred_np = pred[0, 0].cpu().numpy()
-                make_prediction_grid_and_save(
-                    gt_np, lci_np, pred_np,
-                    dataset_name=dataset_name, method_name=label,
-                    run_id=sample_idx, base_dir=str(out_dir / 'visualizations'),
-                )
+                preds_np[short_labels[label]] = pred[0, 0].cpu().numpy()
+                col_metrics[short_labels[label]] = (m.get('seg_ssim', m['ssim']), m.get('seg_nrmse', m['nrmse']))
+
+        if not args.no_viz:
+            make_combined_prediction_grid_and_save(
+                gt_np, lci_np, preds_np, run_id=sample_idx,
+                seg=seg_np, col_metrics=col_metrics, base_dir=str(out_dir / 'visualizations'),
+            )
 
     df = pd.DataFrame(results)
     df.to_csv(out_dir / 'per_sample_metrics.csv', index=False)
 
-    print("\nModel legend (config differences):")
-    if varying_keys:
-        for lbl, a in zip(labels, all_args):
-            diffs = '  |  '.join(f"{k}={a.get(k, '?')}" for k in varying_keys)
-            print(f"  {lbl}: {diffs}")
-    else:
-        print("  (all checkpoints share identical scalar hparams)")
+    print("\nModel legend (grid column -> config differences):")
+    for lbl, a in zip(labels, all_args):
+        diffs = '  |  '.join(f"{k}={a.get(k, '?')}" for k in varying_keys) if varying_keys else ''
+        print(f"  {short_labels[lbl]} = {lbl}{': ' + diffs if diffs else ''}")
 
     agg_rows = []
     for label in df['model_label'].unique():
@@ -542,6 +601,13 @@ def main():
                         help="Only use checkpoints whose filename contains this string (e.g. 'acdc')")
     parser.add_argument('--no_viz', action='store_true',
                         help="Skip writing prediction-grid visualizations (faster)")
+    parser.add_argument('--roi_dilation', type=int, default=0,
+                        help="Grow segmentation masks by this many voxels before use (0 = off)")
+    parser.add_argument('--exclude_background', action='store_true',
+                        help="After dilation, drop voxels where GT intensity is near-zero (background). "
+                             "Also adds a 'nonbg' whole-image-minus-background table.")
+    parser.add_argument('--bg_threshold', type=float, default=0.02,
+                        help="GT intensity threshold below which a voxel counts as background")
     parser.add_argument('--device', type=str, default='cuda', choices=['cpu', 'cuda'])
     args = parser.parse_args()
 

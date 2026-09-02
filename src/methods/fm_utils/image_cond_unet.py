@@ -500,29 +500,7 @@ class Downsample(nn.Module):
         assert x.shape[1] == self.channels
         return self.op(x)
 
-class TemporalFiLMAdapter(nn.Module):
-    def __init__(self, time_embed_dim, hidden_dim, feature_dim):
-        super().__init__()
-        self.film_mlp = nn.Sequential(
-            nn.Linear(time_embed_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * feature_dim)  # scale + shift
-        )
-
-    def forward(self, h, t_emb):
-        """
-        h:        [B, C, ...] feature map
-        t_emb:    [B, D] temporal embedding (e.g., Gaussian Fourier or sinusoidal)
-        returns:  FiLM-modulated feature map
-        """
-        gamma_beta = self.film_mlp(t_emb)  # [B, 2*C]
-        gamma, beta = gamma_beta.chunk(2, dim=1)  # [B, C], [B, C]
-
-        while gamma.dim() < h.dim():
-            gamma = gamma.unsqueeze(-1)
-            beta = beta.unsqueeze(-1)
-
-        return h * (1 + gamma) + beta
+from .time_conditioning import TemporalFiLMAdapter
 
 
 
@@ -1375,7 +1353,7 @@ class ConditionedUNet(CondUNetModel):
             resblock_updown=False,
             use_fp16=False,
             use_new_attention_order=False,
-            mask_time = 1.0,
+            mask_time = 0.0,
             **kwargs,
     ):
         """Dim (tuple): (T, C, H, W, D)"""

@@ -13,8 +13,8 @@ from torchdiffeq import odeint_adjoint as odeint
 from torchsde import sdeint
 from torchdyn.models import NeuralODE
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
-from .fm_utils.unet_wrapper import UNetModelWrapper as UNetModel
 from .fm_utils.fm_process_utils import compute_roi_term
+from .fm_utils.backbones import build_backbone
 
 
 class torch_wrapper(torch.nn.Module):
@@ -59,11 +59,18 @@ class TemporalFlowMatching(nn.Module):
         self.u_net_type = kwargs.get('unet_type', 'fmu')
         self.fm_model_unet_expands = kwargs.get('fm_model_unet_expands', [1, 1, 1, 1])
         self.criterion = kwargs.get('loss_fn', nn.MSELoss())
-        if self.u_net_type == 'fmu':
-            self.u_net = UNetModel(dim=(in_shape[0],) + in_shape[2:], num_channels=feature_size, num_res_blocks=1,
-                                   channel_mult=self.fm_model_unet_expands, use_checkpoint=True, attention_resolutions="9999")
-        else:
-            print('choose valid Unet!')
+        # unet_type selects the backbone behind the shared build_backbone()
+        # `forward(t, x_list)` contract. This method's own historical
+        # default, 'fmu', means the bare UNetModelWrapper ('unet' in
+        # build_backbone's canonical naming) — translate here, everything
+        # else ('dit', 'convlstm', ...) passes through.
+        _unet_type = 'unet' if self.u_net_type == 'fmu' else self.u_net_type
+        _reserved = {'feature_size', 'fm_model_unet_expands', 'unet_type', 'num_frames', 'in_shape', 'num_context'}
+        self.u_net = build_backbone(
+            _unet_type, in_shape=in_shape, num_context=in_shape[0], feature_size=feature_size,
+            fm_model_unet_expands=self.fm_model_unet_expands, num_frames=in_shape[0],
+            **{k: v for k, v in kwargs.items() if k not in _reserved},
+        )
 
         self.fm = ExactOptimalTransportConditionalFlowMatcher(sigma=self.training_noise)
         self.node = NeuralODE(self.u_net, solver="dopri5", sensitivity="adjoint", atol=1e-5, rtol=1e-5)
@@ -112,7 +119,10 @@ class TemporalFlowMatching(nn.Module):
         t, xt, ut = self.fm.sample_location_and_conditional_flow(batch_x, batch_y)
 
         xt = xt.reshape(B,T * C, D, H, W)
-        vt = self.u_net(t, xt)
+        # normalize to (B, 1) so every backbone (UNet/DiT/ConvLSTM) sees the
+        # same time-tensor shape, whether t started as (B,) or (B, T)
+        t = t.reshape(B, -1)
+        vt = self.u_net(t, [xt, None])
         vt = vt.reshape(B, T, C, D, H, W)
         return batch_x, ut, vt
 
@@ -145,7 +155,13 @@ class TemporalFlowMatching(nn.Module):
         if self.fill_context:
             batch = self.fill_missing_frames(batch)
         batch = batch.reshape(B, T*C, H, D, W)
-        traj = odeint(self.u_net, batch, t_span, atol=1e-5, rtol=1e-5)
+
+        def _u_net_wrapper(t, x):
+            t = t.reshape(1).expand(x.shape[0]).reshape(x.shape[0], -1)
+            return self.u_net(t, [x, None])
+
+        traj = odeint(_u_net_wrapper, batch, t_span, atol=1e-5, rtol=1e-5,
+                      adjoint_params=tuple(self.u_net.parameters()))
         # canonically we only return the final time point
         val_res = traj[-1]
 

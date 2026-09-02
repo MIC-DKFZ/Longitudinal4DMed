@@ -45,6 +45,148 @@ def _warp_time(time_points: np.ndarray) -> np.ndarray:
         return warped * t_abs_max
 
 
+def _sample_blob_field(
+    dim,
+    seg,
+    intensity,
+    growth_max,
+    apply_prob,
+    planar_only,
+    global_noise_std,
+    global_noise_sigma,
+    n_blobs,
+    blur_range,
+    fill_holes,
+    fill_holes_axis,
+    use_blob_localization=True,
+    seg_threshold=1.0,
+):
+    # TODO: review
+    """Sample one full-strength anatomy-guided displacement field, shared by
+    `deform_structure` and `apply_shared_deform_to_sequence`.
+    `use_blob_localization=False`: one grad-weighted push, no blob randomness.
+    `seg_threshold`: default 1.0 fits ACDC's discrete {0,1,2,3} labels; a
+    continuous/z-scored seg (e.g. Lumiere) needs a lower value (e.g. 0.5).
+    Returns coords_base, full_disp, offset (all (n_dim, *dim) or (n_dim,))."""
+    n_dim = len(dim)
+
+    tmp = [np.arange(i) for i in dim]
+    coords_base = np.array(np.meshgrid(*tmp, indexing='ij')).astype(float)
+    for d in range(n_dim):
+        coords_base[d] -= (np.array(dim).astype(float) - 1)[d] / 2.0
+
+    organ_mask = (seg >= seg_threshold)
+    if fill_holes:
+        if fill_holes_axis is not None:
+            organ_mask = organ_mask.copy()
+            for idx in range(organ_mask.shape[fill_holes_axis]):
+                sl = [slice(None)] * n_dim
+                sl[fill_holes_axis] = idx
+                sl = tuple(sl)
+                organ_mask[sl] = binary_fill_holes(organ_mask[sl])
+        else:
+            organ_mask = binary_fill_holes(organ_mask)
+
+    spacing_ratio = 1.0
+    blur = np.random.uniform(*blur_range)  # randomise boundary sharpness
+    organ_blurred = gaussian_filter(
+        organ_mask.astype(float),
+        sigma=(blur * spacing_ratio, blur, blur) if n_dim == 3 else (blur, blur),
+        order=0,
+        mode='nearest',
+    )
+    grads = np.gradient(organ_blurred)
+    vec_metric = sum(g ** 2 for g in grads) ** 0.5
+    non_zero_pts = np.array(np.nonzero(vec_metric > 0.1)).T  # (N, n_dim)
+
+    blob_params = []
+    if use_blob_localization:
+        # n_blobs<=0 disables blobs entirely (was previously impossible: floor of 1).
+        n_active = np.random.randint(1, max(2, n_blobs) + 1) if n_blobs > 0 else 0
+
+        for _ in range(n_active):
+            mag = intensity * np.random.uniform(2, growth_max)
+            if np.random.rand() < 0.5:
+                mag *= -1
+
+            # Always draw a random unit-vector direction — fixes previous diagonal bias
+            vec = np.random.randn(n_dim)
+            if planar_only and n_dim == 3:
+                vec[2] = 0.0
+            norm = np.linalg.norm(vec)
+            vhat = vec / norm if norm > 1e-8 else np.ones(n_dim) / np.sqrt(n_dim)
+
+            # Randomised Gaussian spatial spread
+            std_dev = np.random.uniform(10, 40)
+
+            # 35% chance: purely Gaussian blob not anchored to seg boundary
+            # simulates satellite lesion or edema independent of the existing structure
+            if np.random.rand() < 0.35 or len(non_zero_pts) == 0:
+                center = tuple(np.random.randint(0, s) for s in dim)
+                gauss = gaussian_kernel(dim, center, std_dev)
+                blob_params.append({'mag': mag, 'gauss': gauss, 'vhat': vhat, 'guided': False})
+            elif np.random.rand() < apply_prob:
+                pt = non_zero_pts[np.random.choice(len(non_zero_pts))]
+                gauss = gaussian_kernel(dim, pt, std_dev)
+                blob_params.append({'mag': mag, 'gauss': gauss, 'vhat': vhat, 'guided': True})
+            else:
+                # global (no Gaussian mask)
+                blob_params.append({'mag': mag, 'gauss': 1.0, 'vhat': vhat, 'guided': True})
+    else:
+        # one grad-weighted push, single direction, no Gaussian localization
+        mag = intensity * np.random.uniform(2, growth_max)
+        if np.random.rand() < 0.5:
+            mag *= -1
+        vec = np.random.randn(n_dim)
+        if planar_only and n_dim == 3:
+            vec[2] = 0.0
+        norm = np.linalg.norm(vec)
+        vhat = vec / norm if norm > 1e-8 else np.ones(n_dim) / np.sqrt(n_dim)
+        blob_params.append({'mag': mag, 'gauss': 1.0, 'vhat': vhat, 'guided': True})
+
+    # Global smooth displacement field — constant across time
+    if global_noise_std > 0.0:
+        global_disp = [
+            gaussian_filter(
+                np.random.randn(*dim).astype(np.float64) * global_noise_std,
+                sigma=global_noise_sigma,
+            )
+            for _ in range(n_dim)
+        ]
+    else:
+        global_disp = None
+
+    full_disp = np.zeros((n_dim, *dim), dtype=float)
+    for blob in blob_params:
+        m, g, v = blob['mag'], blob['gauss'], blob['vhat']
+        if blob['guided']:
+            # anatomy-guided: displace along seg-gradient weighted by Gaussian
+            for d, grad in enumerate(grads):
+                full_disp[d] += grad * m * g * v[d]
+        else:
+            # free Gaussian blob: displace in random direction, Gaussian-weighted
+            for d in range(n_dim):
+                full_disp[d] += g * v[d] * m
+    if global_disp is not None:
+        for d in range(n_dim):
+            full_disp[d] += global_disp[d]
+
+    offset = np.array(dim, dtype=float) / 2.0 - 0.5
+    return coords_base, full_disp, offset
+
+
+def _resample_to_target(frame, target_shape):
+    n_dim = frame.ndim
+    new_dims = [np.linspace(0, frame.shape[i] - 1, target_shape[i]) for i in range(n_dim)]
+    coords_down = np.meshgrid(*new_dims, indexing='ij')
+    new_coords = np.stack([g.ravel() for g in coords_down], axis=-1)
+    original_grid = tuple(np.linspace(0, frame.shape[i] - 1, frame.shape[i]) for i in range(n_dim))
+    interpolator = RegularGridInterpolator(
+        original_grid, frame, method='linear', bounds_error=False, fill_value=0.0
+    )
+    return interpolator(new_coords).reshape(target_shape).astype(np.float32)
+
+
 def deform_structure(
     img,
     seg,
@@ -113,115 +255,65 @@ def deform_structure(
 
     time_points_eff = _warp_time(np.asarray(time_points, dtype=float)) if time_nonlinear else np.asarray(time_points, dtype=float)
 
-    tmp = [np.arange(i) for i in dim]
-    coords_base = np.array(np.meshgrid(*tmp, indexing='ij')).astype(float)
-    for d in range(n_dim):
-        coords_base[d] -= (np.array(dim).astype(float) - 1)[d] / 2.0
-
-    organ_mask = (seg >= 1)
-    if fill_holes:
-        if fill_holes_axis is not None:
-            organ_mask = organ_mask.copy()
-            for idx in range(organ_mask.shape[fill_holes_axis]):
-                sl = [slice(None)] * n_dim
-                sl[fill_holes_axis] = idx
-                sl = tuple(sl)
-                organ_mask[sl] = binary_fill_holes(organ_mask[sl])
-        else:
-            organ_mask = binary_fill_holes(organ_mask)
-
-    spacing_ratio = 1.0
-    blur = np.random.uniform(*blur_range)  # randomise boundary sharpness
-    organ_blurred = gaussian_filter(
-        organ_mask.astype(float),
-        sigma=(blur * spacing_ratio, blur, blur) if n_dim == 3 else (blur, blur),
-        order=0,
-        mode='nearest',
+    coords_base, full_disp, offset = _sample_blob_field(
+        dim, seg, intensity, growth_max, apply_prob, planar_only,
+        global_noise_std, global_noise_sigma, n_blobs, blur_range,
+        fill_holes, fill_holes_axis,
     )
-    grads = np.gradient(organ_blurred)
-    vec_metric = sum(g ** 2 for g in grads) ** 0.5
-    non_zero_pts = np.array(np.nonzero(vec_metric > 0.1)).T  # (N, n_dim)
-
-    # Randomly choose how many blobs to activate this sample
-    n_active = np.random.randint(1, max(2, n_blobs) + 1)
-
-    blob_params = []
-    for _ in range(n_active):
-        mag = intensity * np.random.uniform(2, growth_max)
-        if np.random.rand() < 0.5:
-            mag *= -1
-
-        # Always draw a random unit-vector direction — fixes previous diagonal bias
-        vec = np.random.randn(n_dim)
-        if planar_only and n_dim == 3:
-            vec[2] = 0.0
-        norm = np.linalg.norm(vec)
-        vhat = vec / norm if norm > 1e-8 else np.ones(n_dim) / np.sqrt(n_dim)
-
-        # Randomised Gaussian spatial spread
-        std_dev = np.random.uniform(10, 40)
-
-        # 35% chance: purely Gaussian blob not anchored to seg boundary
-        # simulates satellite lesion or edema independent of the existing structure
-        if np.random.rand() < 0.35 or len(non_zero_pts) == 0:
-            center = tuple(np.random.randint(0, s) for s in dim)
-            gauss = gaussian_kernel(dim, center, std_dev)
-            blob_params.append({'mag': mag, 'gauss': gauss, 'vhat': vhat, 'guided': False})
-        elif np.random.rand() < apply_prob:
-            pt = non_zero_pts[np.random.choice(len(non_zero_pts))]
-            gauss = gaussian_kernel(dim, pt, std_dev)
-            blob_params.append({'mag': mag, 'gauss': gauss, 'vhat': vhat, 'guided': True})
-        else:
-            # global (no Gaussian mask)
-            blob_params.append({'mag': mag, 'gauss': 1.0, 'vhat': vhat, 'guided': True})
-
-    # Global smooth displacement field — constant across time
-    if global_noise_std > 0.0:
-        global_disp = [
-            gaussian_filter(
-                np.random.randn(*dim).astype(np.float64) * global_noise_std,
-                sigma=global_noise_sigma,
-            )
-            for _ in range(n_dim)
-        ]
-    else:
-        global_disp = None
 
     res_list = []
     for tp_eff in time_points_eff:
-        coords = coords_base.copy()
-        for blob in blob_params:
-            m, g, v = blob['mag'], blob['gauss'], blob['vhat']
-            if blob['guided']:
-                # anatomy-guided: displace along seg-gradient weighted by Gaussian
-                for d, grad in enumerate(grads):
-                    coords[d] += grad * m * g * v[d] * tp_eff
-            else:
-                # free Gaussian blob: displace in random direction, Gaussian-weighted
-                for d in range(n_dim):
-                    coords[d] += g * v[d] * m * tp_eff
-        if global_disp is not None:
-            for d in range(n_dim):
-                coords[d] += global_disp[d]
+        coords = coords_base + tp_eff * full_disp
         for d in range(n_dim):
-            coords[d] += img.shape[d] / 2.0 - 0.5
-
+            coords[d] += offset[d]
         warped = map_coordinates(img, coords, order=1, mode='nearest')
+        res_list.append(_resample_to_target(warped, target_shape))
 
-        new_dims = [
-            np.linspace(0, warped.shape[i] - 1, target_shape[i])
-            for i in range(n_dim)
-        ]
-        coords_down = np.meshgrid(*new_dims, indexing='ij')
-        new_coords = np.stack([g.ravel() for g in coords_down], axis=-1)
-        original_grid = tuple(
-            np.linspace(0, warped.shape[i] - 1, warped.shape[i])
-            for i in range(n_dim)
-        )
-        interpolator = RegularGridInterpolator(
-            original_grid, warped, method='linear', bounds_error=False, fill_value=0.0
-        )
-        res_list.append(interpolator(new_coords).reshape(target_shape).astype(np.float32))
+    return np.stack(res_list)  # (T, *target_shape)
+
+
+def apply_shared_deform_to_sequence(
+    seq,
+    seg,
+    intensity=20.0,
+    growth_max=5.0,
+    apply_prob=0.5,
+    target_shape=None,
+    planar_only=False,
+    global_noise_std=0.0,
+    global_noise_sigma=8.0,
+    n_blobs=2,
+    blur_range=(2, 7),
+    fill_holes=True,
+    fill_holes_axis=None,
+    use_blob_localization=True,
+    seg_threshold=1.0,
+):
+    # TODO: review
+    """Sample ONE displacement field and apply it identically to every frame
+    of a real sequence (vs. deform_structure's single-frame -> synthetic
+    growth). seq: (T, H, W, D); seg: (H, W, D) anatomy anchor; other args as
+    deform_structure, no time axis. `seg_threshold`: see _sample_blob_field
+    (default 1.0 fits ACDC labels; use ~0.5 for a continuous seg like
+    Lumiere's). Returns (T, *target_shape) float32."""
+    dim = seq.shape[1:]
+    n_dim = len(dim)
+    if target_shape is None:
+        target_shape = dim
+
+    coords_base, full_disp, offset = _sample_blob_field(
+        dim, seg, intensity, growth_max, apply_prob, planar_only,
+        global_noise_std, global_noise_sigma, n_blobs, blur_range,
+        fill_holes, fill_holes_axis, use_blob_localization, seg_threshold,
+    )
+    coords = coords_base + full_disp
+    for d in range(n_dim):
+        coords[d] += offset[d]
+
+    res_list = []
+    for t in range(seq.shape[0]):
+        warped = map_coordinates(seq[t], coords, order=1, mode='nearest')
+        res_list.append(_resample_to_target(warped, target_shape))
 
     return np.stack(res_list)  # (T, *target_shape)
 

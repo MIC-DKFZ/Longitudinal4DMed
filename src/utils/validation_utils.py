@@ -24,6 +24,7 @@ try:
                                   network_type="squeeze",
                                   is_fake_3d=True,
                                   fake_3d_ratio=0.2)
+    perc_loss_fn.eval()  # frozen metric net defaults to train() -> dropout makes it nondeterministic
     metric_functions['perc'] = perc_loss_fn
 
 except:
@@ -214,7 +215,13 @@ def _compute_metric_with_mask(metric_function, model_output, batch_y_val, change
         # for lpips, ensure minimum spatial size, as some dims may be too low.
         model_output = _ensure_min_spatial_for_lpips(model_output)
         batch_y_val = _ensure_min_spatial_for_lpips(batch_y_val)
-        metric_tensor = metric_function(model_output, batch_y_val)
+        # generative.losses.PerceptualLoss(is_fake_3d=True) draws an unseeded
+        # torch.randperm to subsample slices, so the same fixed inputs (e.g.
+        # the last-context-image heuristic) score differently every call.
+        # Pin the RNG for this call only, then restore it.
+        with torch.random.fork_rng(devices=[model_output.device] if model_output.is_cuda else []):
+            torch.manual_seed(0)
+            metric_tensor = metric_function(model_output, batch_y_val)
         return metric_tensor.mean()
 
     metric_tensor = metric_function(model_output, batch_y_val)

@@ -59,7 +59,8 @@ class ACDCDataset(Dataset):
         # we only slightly change this in order to keep the old stuff
         self.num_to_keep = kwargs.get("num_to_keep_context", 11)
         self.code_original = False
-        self.distance = self.num_to_keep
+        # was tied to num_to_keep_context; now its own arg (see parser.py)
+        self.distance = kwargs.get('context_target_distance', 6)
 
         if self.hparams['debug'] == True:
             self.data = self.data[:6]

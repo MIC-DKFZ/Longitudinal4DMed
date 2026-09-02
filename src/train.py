@@ -19,6 +19,7 @@ from methods.temporal_flow_matching_method import TemporalFlowMatching
 from methods.cronos import CRONOS
 from methods.latent_fm import LatentFMModel
 from methods.deform_flow import DeformFlowModel
+from utils.ema import EMA
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -98,6 +99,7 @@ def train_one_epoch(
         device: torch.device,
         epoch: int,
         log_interval: int,
+        ema: "EMA | None" = None,
 ) -> float:
     model.train()
     running_loss = 0.0
@@ -111,6 +113,8 @@ def train_one_epoch(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         running_loss += loss.item()
         num_batches += 1
 
@@ -148,6 +152,12 @@ def main() -> None:
     if hasattr(model, 'set_writer'):
         model.set_writer(writer)
 
+    use_ema = getattr(args, 'use_ema', False)
+    ema = EMA(model, decay=getattr(args, 'ema_decay', 0.999)) if use_ema else None
+    # whichever model actually gets validated/checkpointed -- EMA shadow if enabled,
+    # otherwise the raw training model, matching SADM's own use_ema/ema_decay convention.
+    eval_model = ema.shadow if ema is not None else model
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -168,6 +178,7 @@ def main() -> None:
                 device=device,
                 epoch=epoch,
                 log_interval=args.log_interval,
+                ema=ema,
             )
             scheduler.step()
             print(f"Epoch {epoch} completed. Average loss: {avg_loss:.4f}")
@@ -175,12 +186,12 @@ def main() -> None:
             writer.add_scalar("Train/lr", optimizer.param_groups[0]["lr"], epoch)
 
             if epoch % args.log_interval == 0:
-                val_result = val_step(validation_loader, model, min_val=best_val, **vars(args))
+                val_result = val_step(validation_loader, eval_model, min_val=best_val, **vars(args))
                 # currently, we still insert the best loss into the val step, will be deprecated
                 avg_val = val_result[1]
                 for metric_name, metric_value in val_result[0].items():
                     writer.add_scalar(f"Val/{metric_name}", metric_value, epoch)
-                _log_image_grid(writer, model, validation_loader, device, data_shape, epoch)
+                _log_image_grid(writer, eval_model, validation_loader, device, data_shape, epoch)
 
                 if avg_val < best_val:
                     bad_epochs = 0
@@ -191,6 +202,14 @@ def main() -> None:
                     # is just the coarse trigger, matching SADM's own bad_epochs>=2 rule.
                     if bad_epochs >= 2 and hasattr(model, 'plateau_function'):
                         model.plateau_function()
+                        if ema is not None:
+                            # plateau_function() can flip phase buffers (e.g. LatentFMModel's
+                            # plat flag) outside of ema.update()'s normal per-step sync --
+                            # copy buffers now so eval_model doesn't lag a full epoch behind
+                            # on phase transitions.
+                            with torch.no_grad():
+                                for shadow_b, b in zip(ema.shadow.buffers(), model.buffers()):
+                                    shadow_b.copy_(b)
 
                 # "best" checkpoint
                 if avg_val < best_val and not args.debug:
@@ -201,6 +220,7 @@ def main() -> None:
                     torch.save(
                         {
                             "model_state_dict": model.state_dict(),
+                            "ema_state_dict": ema.state_dict() if ema is not None else None,
                             "optimizer_state_dict": optimizer.state_dict(),
                             "epoch": epoch,
                             "avg_loss": avg_loss,
@@ -209,6 +229,21 @@ def main() -> None:
                         ckpt_path,
                     )
                     print(f"Saved new best checkpoint to {ckpt_path}")
+
+                # optional: checkpoint every eval round, not just best -- for
+                # post-hoc re-eval under different settings without re-training.
+                if getattr(args, "save_every_eval", False) and not args.debug:
+                    ckpt_path = Path(args.save_dir) / f"epoch{epoch}.pt"
+                    torch.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "ema_state_dict": ema.state_dict() if ema is not None else None,
+                            "epoch": epoch,
+                            "avg_val": avg_val,
+                            "args": vars(args),
+                        },
+                        ckpt_path,
+                    )
     except KeyboardInterrupt:
         print("Training interrupted by user.")
     finally:

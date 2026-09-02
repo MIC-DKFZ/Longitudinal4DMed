@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 
 def process_fill_empty(batch_x, batch_y=None, time_points=None, max_images=16, **kwargs):
@@ -130,20 +131,33 @@ def _normalize_seg_for_loss(seg, loss_shape):
     return seg.reshape(B, 1, *spatial)
 
 
-def compute_roi_term(loss, target_seg):
+def compute_roi_term(loss, target_seg, roi_dilation: int = 0):
     """Mean of per-voxel `loss` restricted to voxels where target_seg > 0.5. Returns 0 (not
-    NaN) if target_seg is None, all-zero, for safety. 
+    NaN) if target_seg is None, all-zero, for safety.
 
     Meant to be added ON TOP OF (not replacing) the base reduced loss, scaled by a
-    lambda_roi_seg hyperparameter at the call site. 
+    lambda_roi_seg hyperparameter at the call site.
 
-    NOTE: turns out this can be really useful for stabilizing training for cronos for different settings. 
+    NOTE: turns out this can be really useful for stabilizing training for cronos for different settings.
     loss: per-voxel loss tensor, NOT yet reduced, shape (B, C', *spatial).
+    roi_dilation: grows the mask by this many voxels (max-pool dilation) before
+    use -- helps when the ROI is tiny (e.g. small tumors), where too few voxels
+    give a sparse/noisy gradient. 0 (default) = no dilation, original behavior.
     """
     if target_seg is None:
         return loss.new_zeros(())
     seg = _normalize_seg_for_loss(target_seg, loss.shape)
     if seg is None:
         return loss.new_zeros(())
-    roi_mask = (seg.to(loss.device) > 0.5).expand_as(loss)
+    roi_mask = (seg.to(loss.device) > 0.5).float()
+    if roi_dilation > 0:
+        # roi_mask has leading singleton dims to broadcast against loss's full
+        # rank (e.g. (B,1,1,D,H,W) vs a (B,T,C,D,H,W) loss) -- max_pool3d only
+        # takes 4D/5D, so flatten everything but the trailing 3 spatial dims.
+        k = 2 * roi_dilation + 1
+        orig_shape = roi_mask.shape
+        flat = roi_mask.reshape(-1, 1, *orig_shape[-3:])
+        flat = F.max_pool3d(flat, kernel_size=k, stride=1, padding=roi_dilation)
+        roi_mask = flat.reshape(orig_shape)
+    roi_mask = (roi_mask > 0).expand_as(loss)
     return (loss * roi_mask).sum() / roi_mask.float().sum().clamp(min=1)

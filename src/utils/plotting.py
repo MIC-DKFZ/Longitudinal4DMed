@@ -152,6 +152,82 @@ def make_prediction_grid_and_save(x_gt, x_con, x_pred, dataset_name, method_name
     plt.close(fig)
 
 
+def make_combined_prediction_grid_and_save(gt, context, preds, run_id=0,
+                                            seg=None, col_metrics=None, base_dir="runs"):
+    """One grid per sample, all models side by side (SADM-style _visualize()):
+    columns = GT[+seg] | Context | one per model in `preds`. Row 0 = images,
+    row 1 = |pred-GT| residuals, shared colorbar.
+
+    gt, context: 2D or 3D (S, H, W) arrays/tensors.
+    preds: ordered {label: array} of each model's prediction, same shape as gt.
+    seg: optional same-shape boolean mask -- picks the slice with the largest
+    segmented area (falls back to max |context-gt| diff otherwise). Drawn as a
+    red overlay on the single GT column (GT vs GT residual is always zero, so
+    there's no separate GT+seg residual to show) and as a yellow contour on
+    Context's own residual, where it's actually meaningful against real error.
+    col_metrics: optional {label: (ssim, nrmse)} for "Context"/model column titles.
+    """
+    def _np(a):
+        return to_nump(a) if isinstance(a, torch.Tensor) else a
+
+    gt, context = _np(gt), _np(context)
+    preds = {k: _np(v) for k, v in preds.items()}
+    if seg is not None:
+        seg = _np(seg)
+
+    if gt.ndim == 3:
+        if seg is not None and seg.any():
+            s = int(np.argmax(seg.reshape(seg.shape[0], -1).sum(axis=1)))
+        else:
+            s = int(np.argmax(np.abs(context - gt).mean(axis=(1, 2))))
+        gt, context = gt[s], context[s]
+        preds = {k: v[s] for k, v in preds.items()}
+        if seg is not None:
+            seg = seg[s]
+
+    has_seg = seg is not None and seg.any()
+    gt_col = "GT+seg" if has_seg else "GT"
+    cols = [gt_col, "Context"] + list(preds.keys())
+
+    residual_ctx = np.abs(context - gt)
+    rel_scale = residual_ctx.max() or 1.0
+    residuals = {gt_col: np.zeros_like(gt), "Context": residual_ctx}
+    residuals.update({k: np.abs(v - gt) for k, v in preds.items()})
+    images = {gt_col: gt, "Context": context, **preds}
+
+    fig, axs = plt.subplots(2, len(cols), figsize=(4 * len(cols), 8))
+    if len(cols) == 1:
+        axs = axs.reshape(2, 1)
+    img_norm = matplotlib.colors.Normalize(vmin=0, vmax=1)
+    res_norm = matplotlib.colors.Normalize(vmin=0, vmax=2)
+    im = None
+    for c, col in enumerate(cols):
+        axs[0, c].imshow(images[col], cmap="gray", norm=img_norm)
+        if has_seg and col == gt_col:
+            axs[0, c].contourf(seg, levels=[0.5, 1], colors=["red"], alpha=0.25)
+        title = col
+        if col_metrics and col in col_metrics:
+            ssim_v, nrmse_v = col_metrics[col]
+            title = f"{col}\nSSIM={ssim_v:.3f}  NRMSE={nrmse_v:.3f}"
+        axs[0, c].set_title(title, fontsize=10)
+        axs[0, c].axis("off")
+
+        im = axs[1, c].imshow(residuals[col] / rel_scale * 2, cmap="magma", norm=res_norm)
+        if has_seg and col == "Context":
+            axs[1, c].contour(seg, levels=[0.5], colors=["yellow"])
+        axs[1, c].axis("off")
+
+    fig.subplots_adjust(bottom=0.14)
+    fig.tight_layout(rect=[0.02, 0.12, 0.98, 0.95])
+    cax = fig.add_axes([0.12, 0.05, 0.76, 0.03])
+    fig.colorbar(im, cax=cax, orientation='horizontal')
+
+    out_path = Path(base_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path / f"sample_{run_id:04d}.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def visualize_predictions(context, target, pred, lci=None, title="Predictions", show=True):
     """Notebook-friendly 2x3 prediction grid (images + residuals).
 
