@@ -4,6 +4,8 @@
 [![CVPRW 2025](https://img.shields.io/badge/CVPRW%202025-Syndata4CV-1b3d6d)](https://openreview.net/forum?id=sRh6ZMebXJ)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](license.txt)
 
+
+![Datasets](results/gt_hero.gif)
 # Longitudinal4DMed: Models and Tools for Longitudinal  and Spatio Temporal Medical Imaging
 
 
@@ -25,7 +27,6 @@ framework for longitudinal medical imaging. The repository also hosts LAUGEN, a 
 
 Actively maintained. Recently added: additional dataloaders, and a nicer eval.py.
 Added /laugen for longitudinal augmentations and data generation. 
-Coming soon: More baselines. 
 ## Installation
 Clone this repository and install the required packages:
 ```bash

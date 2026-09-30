@@ -1,4 +1,5 @@
-from .deform import deform_structure, apply_bias_field, apply_seg_intensity
+from .deform import deform_structure, apply_shared_deform_to_sequence, apply_bias_field, apply_seg_intensity
 from .calibration import fit_params
 
-__all__ = ["deform_structure", "apply_bias_field", "apply_seg_intensity", "fit_params"]
+__all__ = ["deform_structure", "apply_shared_deform_to_sequence", "apply_bias_field",
+           "apply_seg_intensity", "fit_params"]
