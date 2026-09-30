@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](license.txt)
 
 
-![Datasets](results/gt_hero.gif)
+![Datasets](assets/gt_hero.gif)
 # Longitudinal4DMed: Models and Tools for Longitudinal  and Spatio Temporal Medical Imaging
 
 
