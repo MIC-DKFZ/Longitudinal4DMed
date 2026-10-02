@@ -205,6 +205,8 @@ def _build_seg_mask(seg_raw, pred_shape, device, roi_dilation: int = 0, bg_refer
         sr = sr.unsqueeze(1)
     if sr.ndim != len(pred_shape) and sr.numel() == int(np.prod(pred_shape)):
         sr = sr.reshape(pred_shape)
+    if sr.ndim == len(pred_shape) and sr.shape[1] == 1 and tuple(sr.shape[2:]) == tuple(pred_shape[2:]):
+        sr = sr.expand(pred_shape)  # one seg shared by all C modalities
     if tuple(sr.shape) != tuple(pred_shape):
         return None
     mask = (sr > 0.5).float()
@@ -286,6 +288,8 @@ def _make_labels(ckpt_paths, all_args):
 def _load_model(ckpt_path, device):
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     args_ns = argparse.Namespace(**ckpt['args'])
+    if getattr(args_ns, 'frame_encoder_ckpt', None):
+        args_ns.frame_encoder_ckpt = 'scratch'  # weights come from the state dict below
     model = build_model(args_ns, device)
     incompatible = model.load_state_dict(ckpt['model_state_dict'], strict=False)
     if incompatible.missing_keys:
@@ -423,6 +427,8 @@ def run_eval(ckpt_paths, args, device):
     # unlike what they were trained on.
     distances = {a.get('context_target_distance') for a in all_args}
     assert len(distances) == 1, f"All checkpoints must share the same context_target_distance, got: {distances}"
+    synth = {bool(a.get('synth_modalities', False)) for a in all_args}
+    assert len(synth) == 1, f"All checkpoints must share the same synth_modalities (channel count), got: {synth}"
 
     labels, varying_keys = _make_labels(ckpt_paths, all_args)
     # Full labels (varying-hparam dumps) are precise but too long for plot

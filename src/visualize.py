@@ -90,6 +90,8 @@ def run(args: argparse.Namespace) -> None:
     saved_args = ckpt.get("args", {})
     model_args = argparse.Namespace(**saved_args)
     model_args.device = str(device)
+    if getattr(model_args, 'frame_encoder_ckpt', None):
+        model_args.frame_encoder_ckpt = 'scratch'  # weights come from the state dict below
     if args.data_dir:
         os.environ["DATA_DIR"] = args.data_dir
 

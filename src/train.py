@@ -17,6 +17,7 @@ from pathlib import Path
 from utils.validation_utils import val_step, _extract_batch, _forward_and_reshape, get_last_context_image_baseline
 from methods.temporal_flow_matching_method import TemporalFlowMatching
 from methods.cronos import CRONOS
+from methods.cronos_flex import CRONOSFlex
 from methods.latent_fm import LatentFMModel
 from methods.deform_flow import DeformFlowModel
 from utils.ema import EMA
@@ -58,12 +59,28 @@ def _log_image_grid(writer: "SummaryWriter", model, loader, device, in_shape, ep
         pass  # image logging is best-effort; never break training
 
 
+def build_param_groups(model: nn.Module, args: argparse.Namespace) -> list:
+    """Pretrained encoder weights (CRONOSFlex frame_encoder: resenc) train at encoder_lr_scale * lr."""
+    get = getattr(model, 'pretrained_parameters', None)
+    pretrained = {id(p) for p in (get() if get else ())}
+    groups = [{'params': [p for p in model.parameters() if id(p) not in pretrained]}]
+    if pretrained:
+        groups.append({'params': [p for p in model.parameters() if id(p) in pretrained],
+                       'lr': args.lr * getattr(args, 'encoder_lr_scale', 0.05)})
+    return groups
+
+
 def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     # todo: build the option to have different models here
     model_type = args.model_type
     # model_type = 'cronos' # args.model_type
     if model_type == 'cronos':
         model = CRONOS(
+            feature_size=args.base_channels,
+            **(vars(args)),
+        )
+    elif model_type == 'cronos_flex':
+        model = CRONOSFlex(
             feature_size=args.base_channels,
             **(vars(args)),
         )
@@ -159,7 +176,7 @@ def main() -> None:
     eval_model = ema.shadow if ema is not None else model
 
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        build_param_groups(model, args),
         lr=args.lr,
         weight_decay=args.weight_decay,
     )

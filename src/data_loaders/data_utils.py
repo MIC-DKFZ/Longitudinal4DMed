@@ -334,6 +334,35 @@ class DummyTemporalDataset(Dataset):
     def _get_data_shape(self) -> Tuple[int, int, int, int, int]:
         return (self.T, self.C, self.D, self.H, self.W)
 
+class SynthModalityWrapper(Dataset):
+    """Turns a C=1 dataset into a fake C=3 multi-modal one for testing: (x, x^2, inverted
+    foreground), same anatomy, different contrast. Zero (missing) frames stay zero."""
+
+    def __init__(self, dataset, fg_threshold=0.05):
+        self.dataset = dataset
+        self.fg_threshold = fg_threshold
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def _to_modalities(self, x):
+        x = torch.as_tensor(x)
+        if x.shape[-4] != 1:
+            raise ValueError(f'SynthModalityWrapper expects C=1, got {x.shape[-4]}')
+        fg = (x > self.fg_threshold).to(x.dtype)
+        return torch.cat([x, x ** 2, (1 - x) * fg], dim=-4)
+
+    def __getitem__(self, idx):
+        sample = dict(self.dataset[idx])
+        for key in ('target_img', 'context'):
+            sample[key] = self._to_modalities(sample[key])
+        return sample
+
+    def _get_data_shape(self):
+        T, C, *spatial = self.dataset._get_data_shape()
+        return (T, 3, *spatial)
+
+
 def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoader:
     if args.dummy:
         dataset = DummyTemporalDataset()
@@ -411,6 +440,10 @@ def build_dataloader(args: argparse.Namespace, train_test_val='trn') -> DataLoad
         image_size = dataset._get_data_shape()[2:]
         spatial_only = getattr(args, 'augmentation_spatial_only', False)
         dataset = BGTransformWrapper(dataset, build_aug_transform(image_size, spatial_only=spatial_only))
+
+    # applied after augmentation so the transforms still see C=1
+    if getattr(args, 'synth_modalities', False):
+        dataset = SynthModalityWrapper(dataset)
 
     loader = DataLoader(
         dataset,

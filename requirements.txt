@@ -4,6 +4,7 @@ torchvision>=0.15.0
 torchdiffeq>=0.2.3
 torchdyn>=1.0.4
 torchcfm>=0.1.0
+dynamic-network-architectures>=0.4  # only for CRONOSFlex frame_encoder: resenc
 torchmetrics>=1.0.0
 torchsde>=0.2.5
 numpy>=1.24.0

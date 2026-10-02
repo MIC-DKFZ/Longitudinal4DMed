@@ -95,8 +95,8 @@ def process_batch_non_zero(batch_x, batch_y=None, time_points=None, max_images=8
         mask = batch_x[b].sum(dim=(1, 2, 3, 4)) != 0  # (N,)
         valid_idx = torch.where(mask)[0]  # (T,)
         if valid_idx.numel() == 0:
-            # if no valid indices, use the first image
-            idxs = torch.tensor([0], device=batch_x.device)
+            # if no valid indices, repeat the first image so every sample keeps max_images frames
+            idxs = torch.zeros(max_images, dtype=torch.long, device=batch_x.device)
         else:
             if valid_idx.numel() > max_images:
                 # get the last images
@@ -117,6 +117,14 @@ def process_batch_non_zero(batch_x, batch_y=None, time_points=None, max_images=8
         return filtered_images, time_points
 
 
+def process_batch_non_zero_masked(batch_x, time_points=None, max_images=8):
+    """process_batch_non_zero plus a (B, max_images) bool mask, False on the repeat-padded frames."""
+    images, times = process_batch_non_zero(batch_x, time_points=time_points, max_images=max_images)
+    n_valid = (batch_x.sum(dim=(2, 3, 4, 5)) != 0).sum(dim=1).clamp(min=1, max=max_images)  # (B,)
+    mask = torch.arange(max_images, device=batch_x.device)[None] < n_valid[:, None]
+    return images, times, mask
+
+
 def _normalize_seg_for_loss(seg, loss_shape):
     """Reshape a target_seg tensor so that the spatial shape fits.
     """
@@ -131,7 +139,7 @@ def _normalize_seg_for_loss(seg, loss_shape):
     return seg.reshape(B, 1, *spatial)
 
 
-def compute_roi_term(loss, target_seg, roi_dilation: int = 0):
+def compute_roi_term(loss, target_seg, roi_dilation: int = 0, valid=None):
     """Mean of per-voxel `loss` restricted to voxels where target_seg > 0.5. Returns 0 (not
     NaN) if target_seg is None, all-zero, for safety.
 
@@ -143,6 +151,8 @@ def compute_roi_term(loss, target_seg, roi_dilation: int = 0):
     roi_dilation: grows the mask by this many voxels (max-pool dilation) before
     use -- helps when the ROI is tiny (e.g. small tumors), where too few voxels
     give a sparse/noisy gradient. 0 (default) = no dilation, original behavior.
+    valid: optional bool tensor broadcastable to `loss`; False voxels (e.g. padded
+    frames) are left out of both the sum and the voxel count.
     """
     if target_seg is None:
         return loss.new_zeros(())
@@ -160,4 +170,6 @@ def compute_roi_term(loss, target_seg, roi_dilation: int = 0):
         flat = F.max_pool3d(flat, kernel_size=k, stride=1, padding=roi_dilation)
         roi_mask = flat.reshape(orig_shape)
     roi_mask = (roi_mask > 0).expand_as(loss)
+    if valid is not None:
+        roi_mask = roi_mask & valid.to(loss.device).expand_as(loss)
     return (loss * roi_mask).sum() / roi_mask.float().sum().clamp(min=1)
