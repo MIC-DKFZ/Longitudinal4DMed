@@ -15,18 +15,26 @@ framework for longitudinal medical imaging. The repository also hosts LAUGEN, a 
 
 ## Features
 
-- Flow Matching for sequence-to-image forecasting.
+- Flow Matching and other methods for sequence-to-image forecasting.
 - Discrete variant (grid-based, e.g. regular follow-up times).
-- Continuous time reconstructions 
+- Continuous time reconstructions.
 - Supports 3D+T or 4D sequences (e.g. MRI volumes, CT or US).
 - Simple, dependency-light PyTorch code.
-- Supports longitudinal and spatio-temporal medical imaging datasets.
+- Longitudinal augmentations and data generation. 
+- 5 different longitudinal and spatio-temporal medical imaging datasets (from preprocessing to dataloader)
 
 
 ## Status
 
-Actively maintained. Recently added: additional dataloaders, and a nicer eval.py.
-Added /laugen for longitudinal augmentations and data generation. 
+Actively maintained. 
+Recently added:
+- CRONOSFlex: see `src/method/cronos_flex.py`; more flexible handling of channels, supports the loading of pretrained architectures more generally
+- Latent FM / CRONOS: for if you do not want to use voxel space
+- `/laugen` for longitudinal augmentation and data generation
+- `eval.py` now supports segmentation and segmentation masked metrics.
+- minor additions: EMA, tests...
+
+
 ## Installation
 Clone this repository and install the required packages:
 ```bash
